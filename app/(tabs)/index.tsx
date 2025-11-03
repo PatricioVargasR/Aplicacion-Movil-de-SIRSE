@@ -11,11 +11,13 @@ import { useRouter } from 'expo-router';
 import { ReportService } from '@/services/reportServices';
 import { Report, CATEGORIES } from '../../data/mockReports';
 import { CategoryBadge } from '../../components/CategoryBadge';
+import { DrawerMenu } from '@/components/DrawnerMenu';
 
 export default function MapScreen() {
   const router = useRouter();
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
+  const [drawerVisible, setDrawerVisible] = useState(false);
 
   useEffect(() => {
     loadReports();
@@ -37,7 +39,10 @@ export default function MapScreen() {
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.menuButton}>
+        <TouchableOpacity
+          style={styles.menuButton}
+          onPress={() => setDrawerVisible(true)}
+        >
           <Text style={styles.menuIcon}>☰</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>SIRSE</Text>
@@ -47,6 +52,11 @@ export default function MapScreen() {
           >
           <Text style={styles.menuIcon}>📋</Text>
         </TouchableOpacity>
+
+        <DrawerMenu
+          visible={drawerVisible} 
+          onClose={() => setDrawerVisible(false)} 
+        />
       </View>
 
       {/* Map Area */}
