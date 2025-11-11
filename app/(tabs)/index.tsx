@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
   ScrollView,
   Alert,
   ActivityIndicator 
@@ -13,10 +13,13 @@ import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { ReportService } from '@/services/reportServices';
 import { Report, CATEGORIES } from '../../data/mockReports';
-import { CategoryBadge } from '../../components/CategoryBadge';
+// import { CategoryBadge } from '../../components/CategoryBadge';
 import { DrawerMenu } from '@/components/DrawnerMenu';
-import { useRef } from 'react'; 
+import { useRef } from 'react';
+import * as Linking from 'expo-linking';
 
+//TODO #1: Hacer que solo salgan los reportes cercanos a la ubicación del usuario o en el encuadre de la pantalla
+// TODO #2: Hacer funcionar el botón de realizar reporte
 interface LocationCoords {
   latitude: number;
   longitude: number;
@@ -42,7 +45,7 @@ export default function MapScreen() {
   const initializeLocation = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      
+
       if (status !== 'granted') {
         Alert.alert(
           'Permiso de ubicación',
@@ -71,7 +74,7 @@ export default function MapScreen() {
   const getLastKnownLocation = async () => {
     try {
       const lastLocation = await Location.getLastKnownPositionAsync();
-      
+
       if (lastLocation) {
         const coords: LocationCoords = {
           latitude: lastLocation.coords.latitude,
@@ -152,6 +155,16 @@ export default function MapScreen() {
   const getCategoryIcon = (category: keyof typeof CATEGORIES) => {
     const config = CATEGORIES[category];
     return config.icon;
+  };
+
+  const openWhatsApp = (phoneNumber: string, message: string) => {
+  const url = `whatsapp://send?phone=${phoneNumber}&text=${encodeURIComponent(message)}`;
+  Linking.openURL(url).catch(() => {
+    Alert.alert(
+      'WhatsApp no encontrado',
+      'Asegúrate de tener WhatsApp instalado.'
+      );
+    });
   };
 
   return (
@@ -235,12 +248,13 @@ export default function MapScreen() {
           onPress={() => {
             Alert.alert(
               'Reportar Incidente',
-              'Para reportar un incidente, usa nuestro Chatbot de WhatsApp.',
+              '¿Deseas enviar tu reporte directamente por WhatsApp?',
               [
                 { text: 'Cancelar', style: 'cancel' },
-                { text: 'Abrir WhatsApp', onPress: () => {
-                  Alert.alert('Próximamente', 'Función en desarrollo');
-                }}
+                {
+                  text: 'Abrir WhatsApp',
+                  onPress: () => openWhatsApp('7714393946', 'Hola, deseo reportar un incidente.')
+                },
               ]
             );
           }}
