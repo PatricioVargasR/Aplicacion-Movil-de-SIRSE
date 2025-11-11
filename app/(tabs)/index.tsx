@@ -5,23 +5,136 @@ import {
   StyleSheet, 
   TouchableOpacity, 
   ScrollView,
+  Alert,
   ActivityIndicator 
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import * as Location from 'expo-location';
 import { ReportService } from '@/services/reportServices';
 import { Report, CATEGORIES } from '../../data/mockReports';
 import { CategoryBadge } from '../../components/CategoryBadge';
 import { DrawerMenu } from '@/components/DrawnerMenu';
+import { useRef } from 'react'; 
+
+interface LocationCoords {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
+}
 
 export default function MapScreen() {
   const router = useRouter();
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
   const [drawerVisible, setDrawerVisible] = useState(false);
+  const [userLocation, setUserLocation] = useState<LocationCoords | null>(null);
+  const [locationPermission, setLocationPermission] = useState(false);
+  const mapRef = useRef<MapView>(null);
 
   useEffect(() => {
+    initializeLocation();
     loadReports();
   }, []);
+
+  // Inicializar ubicación
+  const initializeLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permiso de ubicación',
+          'SIRSE necesita acceso a tu ubicación para mostrarte reportes cercanos.',
+          [{ text: 'OK' }]
+        );
+        setLocationPermission(false);
+        await getLastKnownLocation();
+        return;
+      }
+
+      setLocationPermission(true);
+      await getUserLocation();
+    } catch (error) {
+      console.error('Error initializing location:', error);
+      setUserLocation({
+        latitude: 20.0847,
+        longitude: -98.3686,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      });
+    }
+  };
+
+  // Obtener última ubicación conocida
+  const getLastKnownLocation = async () => {
+    try {
+      const lastLocation = await Location.getLastKnownPositionAsync();
+      
+      if (lastLocation) {
+        const coords: LocationCoords = {
+          latitude: lastLocation.coords.latitude,
+          longitude: lastLocation.coords.longitude,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        };
+        setUserLocation(coords);
+      } else {
+        setUserLocation({
+          latitude: 20.0847,
+          longitude: -98.3686,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        });
+      }
+    } catch (error) {
+      console.error('Error getting last known location:', error);
+      setUserLocation({
+        latitude: 20.0847,
+        longitude: -98.3686,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      });
+    }
+  };
+
+  // Obtener ubicación actual del usuario
+  const getUserLocation = async () => {
+    try {
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      const coords: LocationCoords = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      };
+
+      setUserLocation(coords);
+    } catch (error) {
+      console.error('Error getting location:', error);
+      await getLastKnownLocation();
+    }
+  };
+
+  // Centrar mapa en ubicación del usuario
+  const centerOnUser = async () => {
+    if (locationPermission) {
+      await getUserLocation();
+      // Animar el mapa a la nueva ubicación
+      if (mapRef.current && userLocation) {
+        mapRef.current.animateToRegion(userLocation, 1000);
+      }
+    } else {
+      Alert.alert(
+        'Ubicación desactivada',
+        'Por favor, activa los permisos de ubicación en la configuración de tu dispositivo.'
+      );
+    }
+  };
 
   const loadReports = async () => {
     setLoading(true);
@@ -33,6 +146,12 @@ export default function MapScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Obtener el icono según la categoría
+  const getCategoryIcon = (category: keyof typeof CATEGORIES) => {
+    const config = CATEGORIES[category];
+    return config.icon;
   };
 
   return (
@@ -49,53 +168,63 @@ export default function MapScreen() {
         <TouchableOpacity
           style={styles.menuButton}
           onPress={() => router.push(`/explore`)}
-          >
+        >
           <Text style={styles.menuIcon}>📋</Text>
         </TouchableOpacity>
-
-        <DrawerMenu
-          visible={drawerVisible} 
-          onClose={() => setDrawerVisible(false)} 
-        />
       </View>
 
       {/* Map Area */}
       <View style={styles.mapContainer}>
-        {/* Simulated Map Grid */}
-        <View style={styles.mapGrid}>
-          {[...Array(12)].map((_, i) => (
-            <View key={i} style={styles.gridCell} />
-          ))}
-        </View>
-
-        {/* Map Markers */}
-        {!loading && reports.map((report, index) => (
-          <TouchableOpacity
-            key={report.id}
-            style={[
-              styles.markerPosition,
-              { 
-                top: `${25 + (index * 18)}%`, 
-                left: `${15 + (index * 20)}%` 
-              }
-            ]}
-            onPress={() => router.push(`/report/${report.id}`)}
+        {userLocation ? (
+          <MapView
+            ref={mapRef}
+            style={styles.map}
+            provider={PROVIDER_GOOGLE}
+            initialRegion={userLocation}
+            showsUserLocation={locationPermission}
+            showsMyLocationButton={false}
+            showsCompass={true}
+            showsScale={true}
           >
-            <CategoryBadge category={report.category} size="small" />
-          </TouchableOpacity>
-        ))}
-
-        {/* User Location */}
-        <View style={styles.userLocation}>
-          <View style={styles.userDot} />
-        </View>
+            {/* Marcadores de reportes */}
+            {reports.map((report) => (
+              <Marker
+                key={report.id}
+                coordinate={{
+                  latitude: report.coordinates.latitude,
+                  longitude: report.coordinates.longitude,
+                }}
+                onPress={() => router.push(`/report/${report.id}`)}
+              >
+                <View style={styles.customMarker}>
+                  <View style={[
+                    styles.markerBadge,
+                    { backgroundColor: CATEGORIES[report.category].color }
+                  ]}>
+                    <Text style={styles.markerIcon}>
+                      {getCategoryIcon(report.category)}
+                    </Text>
+                  </View>
+                  {report.status === 'Urgente' && (
+                    <View style={styles.urgentIndicator} />
+                  )}
+                </View>
+              </Marker>
+            ))}
+          </MapView>
+        ) : (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#2196F3" />
+            <Text style={styles.loadingText}>Cargando mapa...</Text>
+          </View>
+        )}
 
         {/* Map Controls */}
         <View style={styles.mapControls}>
-          <TouchableOpacity style={styles.controlButton}>
-            <Text style={styles.controlIcon}>🔍</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.controlButton}>
+          <TouchableOpacity 
+            style={styles.controlButton}
+            onPress={centerOnUser}
+          >
             <Text style={styles.controlIcon}>🎯</Text>
           </TouchableOpacity>
         </View>
@@ -103,7 +232,18 @@ export default function MapScreen() {
         {/* FAB Button */}
         <TouchableOpacity 
           style={styles.fab}
-          onPress={() => router.push('/modal')}
+          onPress={() => {
+            Alert.alert(
+              'Reportar Incidente',
+              'Para reportar un incidente, usa nuestro Chatbot de WhatsApp.',
+              [
+                { text: 'Cancelar', style: 'cancel' },
+                { text: 'Abrir WhatsApp', onPress: () => {
+                  Alert.alert('Próximamente', 'Función en desarrollo');
+                }}
+              ]
+            );
+          }}
         >
           <Text style={styles.fabIcon}>+</Text>
         </TouchableOpacity>
@@ -123,6 +263,12 @@ export default function MapScreen() {
           </View>
         </ScrollView>
       </View>
+
+      {/* Drawer Menu */}
+      <DrawerMenu
+        visible={drawerVisible} 
+        onClose={() => setDrawerVisible(false)} 
+      />
     </View>
   );
 }
@@ -138,7 +284,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 15,
+    paddingTop: 50,
     paddingBottom: 16,
   },
   menuButton: {
@@ -161,6 +307,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#E8F5E9',
     position: 'relative',
+  },
+  map: {
+    width: '100%',
+    height: '100%',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#E8F5E9',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#757575',
   },
   mapGrid: {
     position: 'absolute',
@@ -275,5 +436,37 @@ const styles = StyleSheet.create({
   legendText: {
     fontSize: 12,
     color: '#424242',
-  }
+  },
+    customMarker: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  markerBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 5,
+  },
+  markerIcon: {
+    fontSize: 18,
+  },
+  urgentIndicator: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#FF5252',
+    borderWidth: 2,
+    borderColor: '#FFF',
+  },
 });
