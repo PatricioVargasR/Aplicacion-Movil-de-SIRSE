@@ -10,13 +10,26 @@ import {
   TouchableOpacity, 
   ScrollView,
   Dimensions,
-  ActivityIndicator 
+  ActivityIndicator,
+  Alert 
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
+import * as Location from 'expo-location';
 import { Report, CATEGORIES } from '@/data/mockReports';
 import { ReportService } from '@/services/reportServices';
 
 const { width, height } = Dimensions.get('window');
+
+// TODO: Revisar que solo carguen los reportes dentro del area visible
+// TODO: Hacer funcionar los filtros
+
+interface LocationCoords {
+  latitude: number;
+  longitude: number;
+  latitudeDelta: number;
+  longitudeDelta: number;
+}
 
 export default function HeatmapScreen() {
   const router = useRouter();
@@ -24,10 +37,98 @@ export default function HeatmapScreen() {
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('7d');
+  const [userLocation, setUserLocation] = useState<LocationCoords | null>(null);
+  const [locationPermission, setLocationPermission] = useState(false);
+
+  useEffect(() => {
+    initializeLocation();
+  }, []);
 
   useEffect(() => {
     loadReports();
   }, [selectedCategory, timeRange]);
+
+  // Inicializar ubicación
+  const initializeLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permiso de ubicación',
+          'SIRSE necesita acceso a tu ubicación para mostrarte el mapa de calor.',
+          [{ text: 'OK' }]
+        );
+        setLocationPermission(false);
+        await getLastKnownLocation();
+        return;
+      }
+
+      setLocationPermission(true);
+      await getUserLocation();
+    } catch (error) {
+      console.error('Error initializing location:', error);
+      setUserLocation({
+        latitude: 20.0847,
+        longitude: -98.3686,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      });
+    }
+  };
+
+  // Obtener última ubicación conocida
+  const getLastKnownLocation = async () => {
+    try {
+      const lastLocation = await Location.getLastKnownPositionAsync();
+
+      if (lastLocation) {
+        const coords: LocationCoords = {
+          latitude: lastLocation.coords.latitude,
+          longitude: lastLocation.coords.longitude,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        };
+        setUserLocation(coords);
+      } else {
+        setUserLocation({
+          latitude: 20.0847,
+          longitude: -98.3686,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        });
+      }
+    } catch (error) {
+      console.error('Error getting last known location:', error);
+      setUserLocation({
+        latitude: 20.0847,
+        longitude: -98.3686,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      });
+    }
+  };
+
+  // Obtener ubicación actual del usuario
+  const getUserLocation = async () => {
+    try {
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      const coords: LocationCoords = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      };
+
+      setUserLocation(coords);
+    } catch (error) {
+      console.error('Error getting location:', error);
+      await getLastKnownLocation();
+    }
+  };
 
   const loadReports = async () => {
     setLoading(true);
@@ -42,26 +143,80 @@ export default function HeatmapScreen() {
     }
   };
 
-  // Calcular densidad de reportes por zona (simulado)
+  // Calcular densidad de reportes por zona basado en coordenadas reales
   const calculateHeatZones = () => {
-    const zones = [
-      { x: 20, y: 15, intensity: 0.9, count: 12 }, // Centro
-      { x: 60, y: 25, intensity: 0.7, count: 8 },  // Norte
-      { x: 35, y: 60, intensity: 0.5, count: 5 },  // Sur
-      { x: 75, y: 70, intensity: 0.3, count: 3 },  // Este
-    ];
-    return zones;
+    if (reports.length === 0) return [];
+
+    // Radio de agrupación (aproximadamente 500 metros)
+    const clusterRadius = 0.005;
+    const clusters: Array<{
+      lat: number;
+      lng: number;
+      count: number;
+      reports: Report[];
+    }> = [];
+
+    // Agrupar reportes cercanos
+    reports.forEach(report => {
+      let addedToCluster = false;
+
+      for (const cluster of clusters) {
+        const distance = Math.sqrt(
+          Math.pow(cluster.lat - report.coordinates.latitude, 2) +
+          Math.pow(cluster.lng - report.coordinates.longitude, 2)
+        );
+
+        if (distance < clusterRadius) {
+          cluster.count++;
+          cluster.reports.push(report);
+          // Actualizar centro del cluster
+          cluster.lat = cluster.reports.reduce((sum, r) => sum + r.coordinates.latitude, 0) / cluster.reports.length;
+          cluster.lng = cluster.reports.reduce((sum, r) => sum + r.coordinates.longitude, 0) / cluster.reports.length;
+          addedToCluster = true;
+          break;
+        }
+      }
+
+      if (!addedToCluster) {
+        clusters.push({
+          lat: report.coordinates.latitude,
+          lng: report.coordinates.longitude,
+          count: 1,
+          reports: [report]
+        });
+      }
+    });
+
+    // Calcular intensidad basada en la cantidad de reportes
+    const maxCount = Math.max(...clusters.map(c => c.count), 1);
+    
+    return clusters.map(cluster => {
+      const intensity = Math.min(cluster.count / maxCount, 1);
+      return {
+        latitude: cluster.lat,
+        longitude: cluster.lng,
+        intensity,
+        count: cluster.count
+      };
+    });
   };
 
   const heatZones = calculateHeatZones();
 
   // Obtener color según intensidad
   const getHeatColor = (intensity: number) => {
-    if (intensity >= 0.8) return 'rgba(255, 0, 0, 0.7)';      // Rojo intenso
-    if (intensity >= 0.6) return 'rgba(255, 87, 34, 0.6)';    // Naranja
-    if (intensity >= 0.4) return 'rgba(255, 152, 0, 0.5)';    // Amarillo-naranja
-    if (intensity >= 0.2) return 'rgba(255, 235, 59, 0.4)';   // Amarillo
-    return 'rgba(76, 175, 80, 0.3)';                          // Verde (bajo)
+    if (intensity >= 0.8) return 'rgba(255, 0, 0, 0.5)';      // Rojo intenso
+    if (intensity >= 0.6) return 'rgba(255, 87, 34, 0.4)';    // Naranja
+    if (intensity >= 0.4) return 'rgba(255, 152, 0, 0.35)';   // Amarillo-naranja
+    if (intensity >= 0.2) return 'rgba(255, 235, 59, 0.3)';   // Amarillo
+    return 'rgba(76, 175, 80, 0.25)';                         // Verde (bajo)
+  };
+
+  // Obtener radio según intensidad
+  const getHeatRadius = (intensity: number, count: number) => {
+    const baseRadius = 200; // metros
+    const maxRadius = 800;  // metros
+    return Math.min(baseRadius + (intensity * count * 100), maxRadius);
   };
 
   // Estadísticas por categoría
@@ -142,44 +297,68 @@ export default function HeatmapScreen() {
         <View style={styles.heatmapCard}>
           <Text style={styles.cardTitle}>Zonas de Mayor Incidencia</Text>
           
-          {loading ? (
+          {loading || !userLocation ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#2196F3" />
+              <Text style={styles.loadingText}>Cargando mapa...</Text>
             </View>
           ) : (
             <View style={styles.heatmapContainer}>
-              {/* Grid de fondo */}
-              <View style={styles.gridBackground}>
-                {[...Array(12)].map((_, i) => (
-                  <View key={i} style={styles.gridCell} />
+              <MapView
+                style={styles.map}
+                provider={PROVIDER_GOOGLE}
+                initialRegion={userLocation}
+                showsUserLocation={locationPermission}
+                showsMyLocationButton={false}
+                scrollEnabled={false}
+                zoomEnabled={true}
+                pitchEnabled={false}
+                rotateEnabled={false}
+              >
+                {/* Círculos de calor */}
+                {heatZones.map((zone, index) => (
+                  <Circle
+                    key={`circle-${index}`}
+                    center={{
+                      latitude: zone.latitude,
+                      longitude: zone.longitude,
+                    }}
+                    radius={getHeatRadius(zone.intensity, zone.count)}
+                    fillColor={getHeatColor(zone.intensity)}
+                    strokeColor="transparent"
+                  />
                 ))}
-              </View>
 
-              {/* Zonas de calor */}
-              {heatZones.map((zone, index) => (
-                <View
-                  key={index}
-                  style={[
-                    styles.heatZone,
-                    {
-                      left: `${zone.x}%`,
-                      top: `${zone.y}%`,
-                      backgroundColor: getHeatColor(zone.intensity),
-                      width: 80 + (zone.intensity * 60),
-                      height: 80 + (zone.intensity * 60),
-                    }
-                  ]}
-                >
-                  <View style={styles.zoneLabel}>
-                    <Text style={styles.zoneLabelText}>{zone.count}</Text>
-                  </View>
+                {/* Marcadores con conteo */}
+                {heatZones.map((zone, index) => (
+                  <Marker
+                    key={`marker-${index}`}
+                    coordinate={{
+                      latitude: zone.latitude,
+                      longitude: zone.longitude,
+                    }}
+                  >
+                    <View style={styles.heatMarker}>
+                      <View style={[
+                        styles.heatMarkerBadge,
+                        { 
+                          backgroundColor: getHeatColor(zone.intensity).replace('0.5', '0.9').replace('0.4', '0.9').replace('0.35', '0.9').replace('0.3', '0.9').replace('0.25', '0.9')
+                        }
+                      ]}>
+                        <Text style={styles.heatMarkerText}>{zone.count}</Text>
+                      </View>
+                    </View>
+                  </Marker>
+                ))}
+              </MapView>
+
+              {heatZones.length === 0 && (
+                <View style={styles.emptyStateOverlay}>
+                  <Text style={styles.emptyStateText}>
+                    📍 No hay reportes para mostrar
+                  </Text>
                 </View>
-              ))}
-
-              {/* Marcador de ubicación del usuario */}
-              <View style={styles.userMarker}>
-                <View style={styles.userDot} />
-              </View>
+              )}
             </View>
           )}
 
@@ -188,11 +367,11 @@ export default function HeatmapScreen() {
             <Text style={styles.legendTitle}>Nivel de incidencia</Text>
             <View style={styles.legendScale}>
               <View style={styles.legendItem}>
-                <View style={[styles.legendColor, { backgroundColor: 'rgba(76, 175, 80, 0.3)' }]} />
+                <View style={[styles.legendColor, { backgroundColor: 'rgba(76, 175, 80, 0.5)' }]} />
                 <Text style={styles.legendText}>Baja</Text>
               </View>
               <View style={styles.legendItem}>
-                <View style={[styles.legendColor, { backgroundColor: 'rgba(255, 235, 59, 0.4)' }]} />
+                <View style={[styles.legendColor, { backgroundColor: 'rgba(255, 235, 59, 0.5)' }]} />
                 <Text style={styles.legendText}>Media</Text>
               </View>
               <View style={styles.legendItem}>
@@ -200,7 +379,7 @@ export default function HeatmapScreen() {
                 <Text style={styles.legendText}>Alta</Text>
               </View>
               <View style={styles.legendItem}>
-                <View style={[styles.legendColor, { backgroundColor: 'rgba(255, 0, 0, 0.7)' }]} />
+                <View style={[styles.legendColor, { backgroundColor: 'rgba(255, 0, 0, 0.5)' }]} />
                 <Text style={styles.legendText}>Crítica</Text>
               </View>
             </View>
@@ -389,69 +568,62 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#757575',
+  },
   heatmapContainer: {
     width: '100%',
     height: 300,
     backgroundColor: '#E8F5E9',
     borderRadius: 8,
-    position: 'relative',
     overflow: 'hidden',
+    position: 'relative',
   },
-  gridBackground: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  map: {
+    width: '100%',
+    height: '100%',
   },
-  gridCell: {
-    width: '33.33%',
-    height: '25%',
-    borderWidth: 0.5,
-    borderColor: '#C8E6C9',
+  heatMarker: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  heatZone: {
-    position: 'absolute',
-    borderRadius: 100,
+  heatMarkerBadge: {
+    minWidth: 32,
+    minHeight: 32,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  zoneLabel: {
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-  },
-  zoneLabelText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#212121',
-  },
-  userMarker: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    width: 20,
-    height: 20,
-    marginLeft: -10,
-    marginTop: -10,
-    borderRadius: 10,
-    backgroundColor: '#FFF',
-    justifyContent: 'center',
-    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 2,
+    borderColor: '#FFF',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
     shadowRadius: 3,
     elevation: 5,
   },
-  userDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#2196F3',
+  heatMarkerText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFF',
+  },
+  emptyStateOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+  },
+  emptyStateText: {
+    fontSize: 16,
+    color: '#757575',
+    textAlign: 'center',
   },
   legend: {
     marginTop: 16,
