@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   View, 
   Text, 
@@ -20,19 +20,71 @@ export default function FeedScreen() {
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<FilterTab>('Todos');
 
-  useEffect(() => {
-    loadReports();
-  }, [activeFilter]);
+  // Paginación
+  const [page, setPage] = useState<number>(1);
+  const [hasMore, setHasMore] = useState<boolean>(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const loadReports = async () => {
+  // loadReports ahora depende de page y activeFilter (useCallback para estabilidad)
+  const loadReports = useCallback(async () => {
     setLoading(true);
+    setErrorMessage(null);
+
     try {
-      const data = await ReportService.getAllReports();
-      setReports(data);
-    } catch (error) {
-      console.error('Error loading reports:', error);
+      const response = await ReportService.getPaginatedReports({
+        page,
+        limit: 10, // 1 por página según lo solicitado
+        // Puedes mapear el filtro "En proceso" a status, etc.
+        status: activeFilter === 'En proceso' ? 'En proceso' : undefined,
+        // añadir category u otros filtros según necesites
+      });
+
+      // Si page === 1 reemplazamos; si no, acumulamos
+      if (page === 1) {
+        setReports(response.data);
+      } else {
+        // Evitamos duplicados por si acaso
+        setReports(prev => {
+          const ids = new Set(prev.map(r => r.id));
+          const newItems = response.data.filter(r => !ids.has(r.id));
+          return [...prev, ...newItems];
+        });
+      }
+
+      setHasMore(response.hasMore);
+
+      // Si no hay datos en la primera página mostramos mensaje
+      if (response.total === 0) {
+        setErrorMessage('No hay reportes disponibles.');
+      }
+    } catch (error: any) {
+      if (error?.code === 'OFFLINE') {
+        setErrorMessage('Sin conexión a internet.');
+      } else {
+        setErrorMessage('Ocurrió un error al cargar reportes.');
+      }
     } finally {
       setLoading(false);
+    }
+  }, [page, activeFilter]);
+
+  // Ejecutar carga cuando cambia page o activeFilter
+  useEffect(() => {
+    loadReports();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, activeFilter]);
+
+  // Cuando el usuario cambia filtro, reiniciamos la paginación
+  const onChangeFilter = (filter: FilterTab) => {
+    setActiveFilter(filter);
+    setPage(1);       // dispara el useEffect que llama loadReports
+    setHasMore(true); // reset
+    setReports([]);   // limpiamos lista previa
+  };
+
+  const onLoadMore = () => {
+    if (hasMore && !loading) {
+      setPage(prev => prev + 1); // No llamamos loadReports aquí
     }
   };
 
@@ -62,7 +114,7 @@ export default function FeedScreen() {
               styles.filterButton,
               activeFilter === filter && styles.filterButtonActive
             ]}
-            onPress={() => setActiveFilter(filter)}
+            onPress={() => onChangeFilter(filter)}
           >
             <Text style={[
               styles.filterText,
@@ -74,8 +126,15 @@ export default function FeedScreen() {
         ))}
       </ScrollView>
 
+      {/* Mensaje de error / sin datos */}
+      {errorMessage && (
+        <View style={{ padding: 12, alignItems: 'center' }}>
+          <Text style={{ color: 'red' }}>{errorMessage}</Text>
+        </View>
+      )}
+
       {/* Reports List */}
-      {loading ? (
+      {loading && page === 1 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#2196F3" />
         </View>
@@ -88,6 +147,23 @@ export default function FeedScreen() {
               onPress={() => router.push(`/report/${report.id}`)}
             />
           ))}
+
+          {/* Loader para "cargando siguiente página" */}
+          {loading && page > 1 && (
+            <View style={{ padding: 12, alignItems: 'center' }}>
+              <ActivityIndicator size="small" color="#2196F3" />
+            </View>
+          )}
+
+          {/* Botón Cargar más */}
+          {hasMore && !loading && (
+            <TouchableOpacity
+              style={{ padding: 16, alignItems: 'center' }}
+              onPress={onLoadMore}
+            >
+              <Text style={{ color: '#2196F3', fontWeight: '600' }}>Cargar más</Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       )}
     </View>
