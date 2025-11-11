@@ -12,6 +12,9 @@ import { ReportService } from '@/services/reportServices';
 import { Report } from '../../data/mockReports';
 import { ReportCard } from '../../components/ReportCard';
 
+// TODO: Función de filtros de Cerca de ti
+// TODO: Obtener filtros solo de la ubicación
+// TODO: Realizar notificaciones
 type FilterTab = 'Todos' | 'Recientes' | 'Cerca de ti' | 'En proceso';
 
 export default function FeedScreen() {

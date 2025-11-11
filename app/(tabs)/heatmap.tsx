@@ -14,15 +14,15 @@ import {
   Alert 
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Circle, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { Report, CATEGORIES } from '@/data/mockReports';
 import { ReportService } from '@/services/reportServices';
 
+// TODO: Obtener solo los reportes de esa zona, más no filtrarlos
+// TODO: Habilitar filtros
+// TODO: Corregir overlay
 const { width, height } = Dimensions.get('window');
-
-// TODO: Revisar que solo carguen los reportes dentro del area visible
-// TODO: Hacer funcionar los filtros
 
 interface LocationCoords {
   latitude: number;
@@ -33,12 +33,14 @@ interface LocationCoords {
 
 export default function HeatmapScreen() {
   const router = useRouter();
-  const [reports, setReports] = useState<Report[]>([]);
+  const [allReports, setAllReports] = useState<Report[]>([]);
+  const [visibleReports, setVisibleReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('7d');
   const [userLocation, setUserLocation] = useState<LocationCoords | null>(null);
   const [locationPermission, setLocationPermission] = useState(false);
+  const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
 
   useEffect(() => {
     initializeLocation();
@@ -47,6 +49,13 @@ export default function HeatmapScreen() {
   useEffect(() => {
     loadReports();
   }, [selectedCategory, timeRange]);
+
+  // Filtrar reportes cuando cambia la región visible
+  useEffect(() => {
+    if (currentRegion && allReports.length > 0) {
+      filterVisibleReports(currentRegion);
+    }
+  }, [currentRegion, allReports]);
 
   // Inicializar ubicación
   const initializeLocation = async () => {
@@ -68,12 +77,14 @@ export default function HeatmapScreen() {
       await getUserLocation();
     } catch (error) {
       console.error('Error initializing location:', error);
-      setUserLocation({
+      const defaultLocation = {
         latitude: 20.0847,
         longitude: -98.3686,
         latitudeDelta: 0.05,
         longitudeDelta: 0.05,
-      });
+      };
+      setUserLocation(defaultLocation);
+      setCurrentRegion(defaultLocation);
     }
   };
 
@@ -90,22 +101,27 @@ export default function HeatmapScreen() {
           longitudeDelta: 0.05,
         };
         setUserLocation(coords);
+        setCurrentRegion(coords);
       } else {
-        setUserLocation({
+        const defaultLocation = {
           latitude: 20.0847,
           longitude: -98.3686,
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
-        });
+        };
+        setUserLocation(defaultLocation);
+        setCurrentRegion(defaultLocation);
       }
     } catch (error) {
       console.error('Error getting last known location:', error);
-      setUserLocation({
+      const defaultLocation = {
         latitude: 20.0847,
         longitude: -98.3686,
         latitudeDelta: 0.05,
         longitudeDelta: 0.05,
-      });
+      };
+      setUserLocation(defaultLocation);
+      setCurrentRegion(defaultLocation);
     }
   };
 
@@ -124,6 +140,7 @@ export default function HeatmapScreen() {
       };
 
       setUserLocation(coords);
+      setCurrentRegion(coords);
     } catch (error) {
       console.error('Error getting location:', error);
       await getLastKnownLocation();
@@ -135,7 +152,13 @@ export default function HeatmapScreen() {
     try {
       const filters = selectedCategory ? { category: selectedCategory } : {};
       const data = await ReportService.getAllReports(filters);
-      setReports(data);
+      setAllReports(data);
+      // Si ya hay una región, filtrar inmediatamente
+      if (currentRegion) {
+        filterVisibleReports(currentRegion, data);
+      } else {
+        setVisibleReports(data);
+      }
     } catch (error) {
       console.error('Error loading reports:', error);
     } finally {
@@ -143,9 +166,30 @@ export default function HeatmapScreen() {
     }
   };
 
+  // Filtrar reportes que están dentro de la región visible
+  const filterVisibleReports = (region: Region, reports: Report[] = allReports) => {
+    const minLat = region.latitude - region.latitudeDelta / 2;
+    const maxLat = region.latitude + region.latitudeDelta / 2;
+    const minLng = region.longitude - region.longitudeDelta / 2;
+    const maxLng = region.longitude + region.longitudeDelta / 2;
+
+    const filtered = reports.filter(report => {
+      const lat = report.coordinates.latitude;
+      const lng = report.coordinates.longitude;
+      return lat >= minLat && lat <= maxLat && lng >= minLng && lng <= maxLng;
+    });
+
+    setVisibleReports(filtered);
+  };
+
+  // Manejar cambio de región del mapa
+  const handleRegionChange = (region: Region) => {
+    setCurrentRegion(region);
+  };
+
   // Calcular densidad de reportes por zona basado en coordenadas reales
   const calculateHeatZones = () => {
-    if (reports.length === 0) return [];
+    if (visibleReports.length === 0) return [];
 
     // Radio de agrupación (aproximadamente 500 metros)
     const clusterRadius = 0.005;
@@ -157,7 +201,7 @@ export default function HeatmapScreen() {
     }> = [];
 
     // Agrupar reportes cercanos
-    reports.forEach(report => {
+    visibleReports.forEach(report => {
       let addedToCluster = false;
 
       for (const cluster of clusters) {
@@ -219,10 +263,10 @@ export default function HeatmapScreen() {
     return Math.min(baseRadius + (intensity * count * 100), maxRadius);
   };
 
-  // Estadísticas por categoría
+  // Estadísticas por categoría (basadas en reportes visibles)
   const getCategoryStats = () => {
     const stats: Record<string, number> = {};
-    reports.forEach(report => {
+    visibleReports.forEach(report => {
       stats[report.category] = (stats[report.category] || 0) + 1;
     });
     return stats;
@@ -295,7 +339,14 @@ export default function HeatmapScreen() {
 
         {/* Mapa de Calor */}
         <View style={styles.heatmapCard}>
-          <Text style={styles.cardTitle}>Zonas de Mayor Incidencia</Text>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Zonas de Mayor Incidencia</Text>
+            <View style={styles.reportCounter}>
+              <Text style={styles.reportCounterText}>
+                📍 {visibleReports.length}
+              </Text>
+            </View>
+          </View>
           
           {loading || !userLocation ? (
             <View style={styles.loadingContainer}>
@@ -310,10 +361,11 @@ export default function HeatmapScreen() {
                 initialRegion={userLocation}
                 showsUserLocation={locationPermission}
                 showsMyLocationButton={false}
-                scrollEnabled={false}
+                scrollEnabled={true}
                 zoomEnabled={true}
                 pitchEnabled={false}
                 rotateEnabled={false}
+                onRegionChangeComplete={handleRegionChange}
               >
                 {/* Círculos de calor */}
                 {heatZones.map((zone, index) => (
@@ -352,13 +404,17 @@ export default function HeatmapScreen() {
                 ))}
               </MapView>
 
-              {heatZones.length === 0 && (
-                <View style={styles.emptyStateOverlay}>
+              {heatZones.length === 0 && !loading && (
+                <View style={styles.emptyStateOverlay} pointerEvents="none">
                   <Text style={styles.emptyStateText}>
-                    📍 No hay reportes para mostrar
+                    📍 No hay reportes en esta área
+                  </Text>
+                  <Text style={styles.emptyStateSubtext}>
+                    Mueve el mapa para explorar otras zonas
                   </Text>
                 </View>
               )}
+
             </View>
           )}
 
@@ -390,15 +446,17 @@ export default function HeatmapScreen() {
         <View style={styles.statsCard}>
           <Text style={styles.cardTitle}>Incidentes por Categoría</Text>
           <Text style={styles.statsSubtitle}>
-            Total: {reports.length} reportes
+            En esta área: {visibleReports.length} {visibleReports.length === 1 ? 'reporte' : 'reportes'}
           </Text>
 
           <View style={styles.categoryList}>
             {Object.entries(CATEGORIES).map(([category, config]) => {
               const count = categoryStats[category] || 0;
-              const percentage = reports.length > 0 
-                ? ((count / reports.length) * 100).toFixed(0) 
+              const percentage = visibleReports.length > 0 
+                ? ((count / visibleReports.length) * 100).toFixed(0) 
                 : 0;
+
+              if (count === 0) return null; // No mostrar categorías sin reportes
 
               return (
                 <TouchableOpacity
@@ -420,7 +478,7 @@ export default function HeatmapScreen() {
                     </View>
                     <View style={styles.categoryInfo}>
                       <Text style={styles.categoryName}>{category}</Text>
-                      <Text style={styles.categoryCount}>{count} reportes</Text>
+                      <Text style={styles.categoryCount}>{count} {count === 1 ? 'reporte' : 'reportes'}</Text>
                     </View>
                   </View>
 
@@ -442,6 +500,12 @@ export default function HeatmapScreen() {
               );
             })}
           </View>
+
+          {visibleReports.length === 0 && (
+            <Text style={styles.noDataText}>
+              Mueve el mapa para ver estadísticas de otras áreas
+            </Text>
+          )}
         </View>
 
         {/* Recomendaciones */}
@@ -464,6 +528,12 @@ export default function HeatmapScreen() {
               <Text style={styles.recommendationIcon}>📱</Text>
               <Text style={styles.recommendationText}>
                 Activa las notificaciones para recibir alertas en tiempo real
+              </Text>
+            </View>
+            <View style={styles.recommendationItem}>
+              <Text style={styles.recommendationIcon}>🗺️</Text>
+              <Text style={styles.recommendationText}>
+                Explora el mapa moviendo y haciendo zoom para descubrir zonas seguras
               </Text>
             </View>
           </View>
@@ -557,11 +627,27 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   cardTitle: {
     fontSize: 16,
     fontWeight: '600',
     color: '#212121',
-    marginBottom: 16,
+  },
+  reportCounter: {
+    backgroundColor: '#E3F2FD',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  reportCounterText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2196F3',
   },
   loadingContainer: {
     height: 300,
@@ -618,11 +704,19 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    padding: 20,
   },
   emptyStateText: {
     fontSize: 16,
+    fontWeight: '600',
     color: '#757575',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  emptyStateSubtext: {
+    fontSize: 13,
+    color: '#9E9E9E',
     textAlign: 'center',
   },
   legend: {
@@ -737,6 +831,13 @@ const styles = StyleSheet.create({
   progressFill: {
     height: '100%',
     borderRadius: 3,
+  },
+  noDataText: {
+    fontSize: 14,
+    color: '#9E9E9E',
+    textAlign: 'center',
+    fontStyle: 'italic',
+    marginTop: 8,
   },
   recommendationsCard: {
     backgroundColor: '#FFF3E0',

@@ -9,7 +9,7 @@ import {
   ActivityIndicator 
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { ReportService } from '@/services/reportServices';
 import { Report, CATEGORIES } from '../../data/mockReports';
@@ -18,8 +18,8 @@ import { DrawerMenu } from '@/components/DrawnerMenu';
 import { useRef } from 'react';
 import * as Linking from 'expo-linking';
 
-//TODO #1: Hacer que solo salgan los reportes cercanos a la ubicación del usuario o en el encuadre de la pantalla
-// TODO #2: Hacer funcionar el botón de realizar reporte
+// TODO: Obtener solo los reportes de esa zona, más no filtrarlos
+
 interface LocationCoords {
   latitude: number;
   longitude: number;
@@ -29,17 +29,26 @@ interface LocationCoords {
 
 export default function MapScreen() {
   const router = useRouter();
-  const [reports, setReports] = useState<Report[]>([]);
+  const [allReports, setAllReports] = useState<Report[]>([]);
+  const [visibleReports, setVisibleReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [userLocation, setUserLocation] = useState<LocationCoords | null>(null);
   const [locationPermission, setLocationPermission] = useState(false);
+  const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
   const mapRef = useRef<MapView>(null);
 
   useEffect(() => {
     initializeLocation();
     loadReports();
   }, []);
+
+  // Filtrar reportes cuando cambia la región visible
+  useEffect(() => {
+    if (currentRegion && allReports.length > 0) {
+      filterVisibleReports(currentRegion);
+    }
+  }, [currentRegion, allReports]);
 
   // Inicializar ubicación
   const initializeLocation = async () => {
@@ -61,12 +70,14 @@ export default function MapScreen() {
       await getUserLocation();
     } catch (error) {
       console.error('Error initializing location:', error);
-      setUserLocation({
+      const defaultLocation = {
         latitude: 20.0847,
         longitude: -98.3686,
         latitudeDelta: 0.05,
         longitudeDelta: 0.05,
-      });
+      };
+      setUserLocation(defaultLocation);
+      setCurrentRegion(defaultLocation);
     }
   };
 
@@ -83,22 +94,27 @@ export default function MapScreen() {
           longitudeDelta: 0.05,
         };
         setUserLocation(coords);
+        setCurrentRegion(coords);
       } else {
-        setUserLocation({
+        const defaultLocation = {
           latitude: 20.0847,
           longitude: -98.3686,
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
-        });
+        };
+        setUserLocation(defaultLocation);
+        setCurrentRegion(defaultLocation);
       }
     } catch (error) {
       console.error('Error getting last known location:', error);
-      setUserLocation({
+      const defaultLocation = {
         latitude: 20.0847,
         longitude: -98.3686,
         latitudeDelta: 0.05,
         longitudeDelta: 0.05,
-      });
+      };
+      setUserLocation(defaultLocation);
+      setCurrentRegion(defaultLocation);
     }
   };
 
@@ -117,6 +133,7 @@ export default function MapScreen() {
       };
 
       setUserLocation(coords);
+      setCurrentRegion(coords);
     } catch (error) {
       console.error('Error getting location:', error);
       await getLastKnownLocation();
@@ -143,12 +160,39 @@ export default function MapScreen() {
     setLoading(true);
     try {
       const data = await ReportService.getAllReports();
-      setReports(data);
+      setAllReports(data);
+      // Si ya hay una región, filtrar inmediatamente
+      if (currentRegion) {
+        filterVisibleReports(currentRegion, data);
+      } else {
+        setVisibleReports(data);
+      }
     } catch (error) {
       console.error('Error loading reports:', error);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Filtrar reportes que están dentro de la región visible
+  const filterVisibleReports = (region: Region, reports: Report[] = allReports) => {
+    const minLat = region.latitude - region.latitudeDelta / 2;
+    const maxLat = region.latitude + region.latitudeDelta / 2;
+    const minLng = region.longitude - region.longitudeDelta / 2;
+    const maxLng = region.longitude + region.longitudeDelta / 2;
+
+    const filtered = reports.filter(report => {
+      const lat = report.coordinates.latitude;
+      const lng = report.coordinates.longitude;
+      return lat >= minLat && lat <= maxLat && lng >= minLng && lng <= maxLng;
+    });
+
+    setVisibleReports(filtered);
+  };
+
+  // Manejar cambio de región del mapa
+  const handleRegionChange = (region: Region) => {
+    setCurrentRegion(region);
   };
 
   // Obtener el icono según la categoría
@@ -158,11 +202,11 @@ export default function MapScreen() {
   };
 
   const openWhatsApp = (phoneNumber: string, message: string) => {
-  const url = `whatsapp://send?phone=${phoneNumber}&text=${encodeURIComponent(message)}`;
-  Linking.openURL(url).catch(() => {
-    Alert.alert(
-      'WhatsApp no encontrado',
-      'Asegúrate de tener WhatsApp instalado.'
+    const url = `whatsapp://send?phone=${phoneNumber}&text=${encodeURIComponent(message)}`;
+    Linking.openURL(url).catch(() => {
+      Alert.alert(
+        'WhatsApp no encontrado',
+        'Asegúrate de tener WhatsApp instalado.'
       );
     });
   };
@@ -198,9 +242,10 @@ export default function MapScreen() {
             showsMyLocationButton={false}
             showsCompass={true}
             showsScale={true}
+            onRegionChangeComplete={handleRegionChange}
           >
-            {/* Marcadores de reportes */}
-            {reports.map((report) => (
+            {/* Marcadores de reportes visibles */}
+            {visibleReports.map((report) => (
               <Marker
                 key={report.id}
                 coordinate={{
@@ -231,6 +276,13 @@ export default function MapScreen() {
             <Text style={styles.loadingText}>Cargando mapa...</Text>
           </View>
         )}
+
+        {/* Info Badge - Contador de reportes visibles */}
+        <View style={styles.infoBadge}>
+          <Text style={styles.infoBadgeText}>
+            📍 {visibleReports.length} {visibleReports.length === 1 ? 'reporte' : 'reportes'} en esta área
+          </Text>
+        </View>
 
         {/* Map Controls */}
         <View style={styles.mapControls}>
@@ -337,45 +389,24 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#757575',
   },
-  mapGrid: {
+  infoBadge: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  gridCell: {
-    width: '33.33%',
-    height: '25%',
-    borderWidth: 0.5,
-    borderColor: '#C8E6C9',
-  },
-  markerPosition: {
-    position: 'absolute',
-  },
-  userLocation: {
-    position: 'absolute',
-    top: '45%',
-    left: '48%',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#FFF',
-    justifyContent: 'center',
-    alignItems: 'center',
+    top: 16,
+    left: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 5,
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
   },
-  userDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#2196F3',
+  infoBadgeText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2196F3',
   },
   mapControls: {
     position: 'absolute',
@@ -451,7 +482,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#424242',
   },
-    customMarker: {
+  customMarker: {
     alignItems: 'center',
     justifyContent: 'center',
   },
