@@ -5,17 +5,19 @@ import {
   StyleSheet, 
   TouchableOpacity, 
   ScrollView,
-  ActivityIndicator 
+  ActivityIndicator,
+  Alert 
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { ReportService } from '@/services/reportServices';
 import { Report } from '../../data/mockReports';
 import { ReportCard } from '../../components/ReportCard';
+import { useLocation } from '@/hooks/useLocation';
+import { calculateGeographicBounds } from '@/utils/locationUtils';
 
-// TODO: Función de filtros de Cerca de ti
-// TODO: Obtener filtros solo de la ubicación
-// TODO: Realizar notificaciones
 type FilterTab = 'Todos' | 'Recientes' | 'Cerca de ti' | 'En proceso';
+
+// TODO: Realizar notificaciones
 
 export default function FeedScreen() {
   const router = useRouter();
@@ -23,30 +25,89 @@ export default function FeedScreen() {
   const [loading, setLoading] = useState(true);
   const [activeFilter, setActiveFilter] = useState<FilterTab>('Todos');
 
-  // Paginación
+  // Hook de ubicación
+  const { location, hasPermission, loading: locationLoading } = useLocation(true);
+
+  // Paginación (solo para "Todos" y "En proceso")
   const [page, setPage] = useState<number>(1);
   const [hasMore, setHasMore] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // loadReports ahora depende de page y activeFilter (useCallback para estabilidad)
+  // Cargar reportes según el filtro activo
   const loadReports = useCallback(async () => {
     setLoading(true);
     setErrorMessage(null);
 
     try {
+      // Filtro "Cerca de Ti"
+      if (activeFilter === 'Cerca de ti') {
+        if (!location) {
+          setErrorMessage('No se pudo obtener tu ubicación.');
+          setReports([]);
+          setLoading(false);
+          return;
+        }
+
+        // Calcular límites geográficos (5km de radio)
+        const bounds = calculateGeographicBounds(location, 5);
+
+        // Obtener reportes del área
+        const nearbyReports = await ReportService.getReportsByArea({
+          bounds,
+          // Puedes agregar más filtros aquí si lo deseas
+        });
+
+        setReports(nearbyReports);
+
+        if (nearbyReports.length === 0) {
+          setErrorMessage('No hay reportes cerca de ti (radio de 5 km).');
+        }
+
+        setHasMore(false); // No hay paginación en "Cerca de ti"
+        setLoading(false);
+        return;
+      }
+
+      // Filtro "Recientes" (últimas 24 horas)
+      if (activeFilter === 'Recientes') {
+        if (!location) {
+          setErrorMessage('No se pudo obtener tu ubicación para calcular distancia.');
+          setReports([]);
+          setLoading(false);
+          return;
+        }
+
+        // Obtener área amplia
+        const bounds = calculateGeographicBounds(location, 50); // 50km de radio
+
+        const recentReports = await ReportService.getReportsByArea({
+          bounds,
+          timeRange: '24h',
+        });
+
+        setReports(recentReports);
+
+        if (recentReports.length === 0) {
+          setErrorMessage('No hay reportes recientes.');
+        }
+
+        setHasMore(false); // No hay paginación en "Recientes"
+        setLoading(false);
+        return;
+      }
+
+      // Filtros "Todos" y "En proceso" - con paginación
       const response = await ReportService.getPaginatedReports({
         page,
-        limit: 10, // 1 por página según lo solicitado
-        // Puedes mapear el filtro "En proceso" a status, etc.
+        limit: 10,
         status: activeFilter === 'En proceso' ? 'En proceso' : undefined,
-        // añadir category u otros filtros según necesites
       });
 
       // Si page === 1 reemplazamos; si no, acumulamos
       if (page === 1) {
         setReports(response.data);
       } else {
-        // Evitamos duplicados por si acaso
+        // Evitamos duplicados
         setReports(prev => {
           const ids = new Set(prev.map(r => r.id));
           const newItems = response.data.filter(r => !ids.has(r.id));
@@ -56,7 +117,6 @@ export default function FeedScreen() {
 
       setHasMore(response.hasMore);
 
-      // Si no hay datos en la primera página mostramos mensaje
       if (response.total === 0) {
         setErrorMessage('No hay reportes disponibles.');
       }
@@ -69,25 +129,43 @@ export default function FeedScreen() {
     } finally {
       setLoading(false);
     }
-  }, [page, activeFilter]);
+  }, [page, activeFilter, location]);
 
-  // Ejecutar carga cuando cambia page o activeFilter
+  // Ejecutar carga cuando cambia page, activeFilter o location
   useEffect(() => {
+    // Si el filtro es "Cerca de ti" y la ubicación está cargando, esperar
+    if (activeFilter === 'Cerca de ti' && locationLoading) {
+      setLoading(true);
+      return;
+    }
+
     loadReports();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, activeFilter]);
+  }, [page, activeFilter, location, locationLoading]);
 
   // Cuando el usuario cambia filtro, reiniciamos la paginación
   const onChangeFilter = (filter: FilterTab) => {
+    // Si selecciona "Cerca de ti" sin permisos de ubicación
+    if (filter === 'Cerca de ti' && !hasPermission) {
+      Alert.alert(
+        'Ubicación requerida',
+        'Para ver reportes cercanos, necesitamos acceso a tu ubicación. Por favor, activa los permisos en la configuración.',
+        [
+          { text: 'Cancelar', style: 'cancel' }
+        ]
+      );
+      return;
+    }
+
     setActiveFilter(filter);
-    setPage(1);       // dispara el useEffect que llama loadReports
-    setHasMore(true); // reset
-    setReports([]);   // limpiamos lista previa
+    setPage(1);
+    setHasMore(true);
+    setReports([]);
   };
 
   const onLoadMore = () => {
-    if (hasMore && !loading) {
-      setPage(prev => prev + 1); // No llamamos loadReports aquí
+    // Solo para filtros con paginación
+    if ((activeFilter === 'Todos' || activeFilter === 'En proceso') && hasMore && !loading) {
+      setPage(prev => prev + 1);
     }
   };
 
@@ -130,9 +208,11 @@ export default function FeedScreen() {
       </ScrollView>
 
       {/* Mensaje de error / sin datos */}
-      {errorMessage && (
-        <View style={{ padding: 12, alignItems: 'center' }}>
-          <Text style={{ color: 'red' }}>{errorMessage}</Text>
+      {errorMessage && !loading && (
+        <View style={{ padding: 16, alignItems: 'center' }}>
+          <Text style={{ color: '#F44336', textAlign: 'center' }}>
+            {errorMessage}
+          </Text>
         </View>
       )}
 
@@ -140,6 +220,9 @@ export default function FeedScreen() {
       {loading && page === 1 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#2196F3" />
+          <Text style={styles.loadingText}>
+            {activeFilter === 'Cerca de ti' ? 'Buscando reportes cercanos...' : 'Cargando reportes...'}
+          </Text>
         </View>
       ) : (
         <ScrollView style={styles.reportsList}>
@@ -147,6 +230,7 @@ export default function FeedScreen() {
             <ReportCard
               key={report.id}
               report={report}
+              userLocation={location}
               onPress={() => router.push(`/report/${report.id}`)}
             />
           ))}
@@ -158,14 +242,23 @@ export default function FeedScreen() {
             </View>
           )}
 
-          {/* Botón Cargar más */}
-          {hasMore && !loading && (
+          {/* Botón Cargar más (solo para Todos y En proceso) */}
+          {hasMore && !loading && (activeFilter === 'Todos' || activeFilter === 'En proceso') && (
             <TouchableOpacity
               style={{ padding: 16, alignItems: 'center' }}
               onPress={onLoadMore}
             >
               <Text style={{ color: '#2196F3', fontWeight: '600' }}>Cargar más</Text>
             </TouchableOpacity>
+          )}
+
+          {/* Mensaje cuando no hay más reportes */}
+          {!hasMore && reports.length > 0 && (
+            <View style={{ padding: 16, alignItems: 'center' }}>
+              <Text style={{ color: '#757575', fontSize: 14 }}>
+                No hay más reportes
+              </Text>
+            </View>
           )}
         </ScrollView>
       )}
@@ -227,6 +320,12 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingVertical: 40,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#757575',
   },
   reportsList: {
     flex: 1,
