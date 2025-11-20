@@ -1,0 +1,1 @@
+# Este archivo puede estar vacío, solo indica que sirse_api es un paquete de Python
