@@ -1,29 +1,60 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  ScrollView,
-  Image,
-  ActivityIndicator 
-} from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
 import { ReportService } from '@/services/reportServices';
-import { Report } from '../../data/mockReports';
+import { getShortAddress } from '@/utils/geoCodingUtils';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+    ActivityIndicator,
+    Dimensions,
+    Image,
+    ScrollView,
+    Share,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View
+} from 'react-native';
 import { CategoryBadge } from '../../components/CategoryBadge';
 import { StatusBadge } from '../../components/StatusBadge';
-import { Share } from 'react-native';
+import { Report } from '../../config/config_types';
+
+const { width } = Dimensions.get('window');
 
 export default function ReportDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
+  const [locationText, setLocationText] = useState<string>('');
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(0);
 
   useEffect(() => {
     loadReport();
   }, [id]);
+
+  // Cargar dirección si es necesario
+  useEffect(() => {
+    const loadAddress = async () => {
+      if (!report) return;
+
+      // Si tiene "WhatsApp", geocodificar
+      if (report.address.toLowerCase().includes('whatsapp')) {
+        try {
+          const address = await getShortAddress(report.coordinates);
+          setLocationText(address);
+        } catch (error) {
+          console.error('Error geocodificando:', error);
+          setLocationText(
+            `${report.coordinates.latitude.toFixed(4)}, ${report.coordinates.longitude.toFixed(4)}`
+          );
+        }
+      } else {
+        // Usar address directamente
+        setLocationText(report.address);
+      }
+    };
+
+    loadAddress();
+  }, [report]);
 
   const loadReport = async () => {
     if (!id) return;
@@ -39,13 +70,9 @@ export default function ReportDetailScreen() {
     }
   };
 
-  // 🕒 Función para formatear el timestamp a fecha y hora legible
   const formatTimestamp = (timestamp: number | string | undefined) => {
     if (!timestamp) return 'Fecha no disponible';
-    // Convertir a número si viene como string
     const time = typeof timestamp === 'string' ? Number(timestamp) : timestamp;
-
-    // Si el timestamp está en segundos, convertir a milisegundos
     const date = new Date(time < 10000000000 ? time * 1000 : time);
 
     return date.toLocaleString('es-MX', {
@@ -77,6 +104,8 @@ export default function ReportDetailScreen() {
     );
   }
 
+  const hasPhotos = report.photos && report.photos.length > 0;
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -88,13 +117,50 @@ export default function ReportDetailScreen() {
       </View>
 
       <ScrollView style={styles.content}>
-        {/* Imagen del reporte */}
-        {report.image && (
-          <Image 
-            source={{ uri: report.image }} 
-            style={styles.image}
-            resizeMode="cover"
-          />
+        {/* Imagen principal */}
+        {hasPhotos && (
+          <View style={styles.imageSection}>
+            <Image 
+              source={{ uri: report.photos[selectedPhotoIndex] }} 
+              style={styles.mainImage}
+              resizeMode="cover"
+            />
+            {report.photos.length > 1 && (
+              <View style={styles.photoCounter}>
+                <Text style={styles.photoCounterText}>
+                  {selectedPhotoIndex + 1} / {report.photos.length}
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Galería de fotos (si hay más de una) */}
+        {hasPhotos && report.photos.length > 1 && (
+          <View style={styles.gallery}>
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.galleryContent}
+            >
+              {report.photos.map((photo, index) => (
+                <TouchableOpacity
+                  key={index}
+                  onPress={() => setSelectedPhotoIndex(index)}
+                  style={[
+                    styles.thumbnail,
+                    selectedPhotoIndex === index && styles.thumbnailSelected
+                  ]}
+                >
+                  <Image 
+                    source={{ uri: photo }} 
+                    style={styles.thumbnailImage}
+                    resizeMode="cover"
+                  />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
         )}
 
         {/* Información general */}
@@ -113,7 +179,9 @@ export default function ReportDetailScreen() {
               <Text style={styles.detailIcon}>📍</Text>
               <View style={styles.detailContent}>
                 <Text style={styles.detailLabel}>Ubicación</Text>
-                <Text style={styles.detailValue}>{report.location}</Text>
+                <Text style={styles.detailValue}>
+                  {locationText || 'Cargando ubicación...'}
+                </Text>
               </View>
             </View>
 
@@ -121,9 +189,35 @@ export default function ReportDetailScreen() {
               <Text style={styles.detailIcon}>🕐</Text>
               <View style={styles.detailContent}>
                 <Text style={styles.detailLabel}>Fecha y hora</Text>
-                <Text style={styles.detailValue}>{formatTimestamp(report.reportedAtTimestamp)}</Text>
+                <Text style={styles.detailValue}>
+                  {formatTimestamp(report.reportedAtTimestamp)}
+                </Text>
               </View>
             </View>
+
+            <View style={styles.detailRow}>
+              <Text style={styles.detailIcon}>👤</Text>
+              <View style={styles.detailContent}>
+                <Text style={styles.detailLabel}>Reportado por</Text>
+                <Text style={styles.detailValue}>{report.reporterName}</Text>
+              </View>
+            </View>
+
+            {report.severity && (
+              <View style={styles.detailRow}>
+                <Text style={styles.detailIcon}>⚠️</Text>
+                <View style={styles.detailContent}>
+                  <Text style={styles.detailLabel}>Severidad</Text>
+                  <Text style={[
+                    styles.detailValue,
+                    styles.severityText,
+                    { color: getSeverityColor(report.severity) }
+                  ]}>
+                    {report.severity.charAt(0).toUpperCase() + report.severity.slice(1)}
+                  </Text>
+                </View>
+              </View>
+            )}
           </View>
 
           <View style={styles.descriptionSection}>
@@ -147,7 +241,7 @@ export default function ReportDetailScreen() {
             onPress={async () => {
               try {
                 await Share.share({
-                  message: `🚨 Reporte: ${report.title}\n\n${report.description}\n\n📍 ${report.location}\n🕒 ${formatTimestamp(report.reportedAtTimestamp)}\n\nVer más en la app.`,
+                  message: `🚨 Reporte: ${report.title}\n\n${report.description}\n\n📍 ${locationText}\n🕒 ${formatTimestamp(report.reportedAtTimestamp)}\n\nVer más en la app.`,
                 });
               } catch (error) {
                 console.error('Error al compartir:', error);
@@ -157,14 +251,22 @@ export default function ReportDetailScreen() {
             <Text style={styles.shareIcon}>📤</Text>
             <Text style={styles.shareText}>Compartir</Text>
           </TouchableOpacity>
-
         </View>
       </ScrollView>
     </View>
   );
 }
 
-// 🎨 Estilos
+// Helper para color de severidad
+const getSeverityColor = (severity: string): string => {
+  switch (severity.toLowerCase()) {
+    case 'alta': return '#F44336';
+    case 'media': return '#FF9800';
+    case 'baja': return '#4CAF50';
+    default: return '#757575';
+  }
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -213,14 +315,55 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
-  image: {
+  imageSection: {
+    position: 'relative',
+  },
+  mainImage: {
     width: '100%',
-    height: 240,
+    height: 300,
     backgroundColor: '#E0E0E0',
+  },
+  photoCounter: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  photoCounterText: {
+    color: '#FFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  gallery: {
+    backgroundColor: '#FFF',
+    paddingVertical: 12,
+  },
+  galleryContent: {
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  thumbnail: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  thumbnailSelected: {
+    borderColor: '#2196F3',
+  },
+  thumbnailImage: {
+    width: '100%',
+    height: '100%',
   },
   infoCard: {
     backgroundColor: '#FFF',
     padding: 20,
+    marginTop: 8,
   },
   titleSection: {
     flexDirection: 'row',
@@ -260,6 +403,9 @@ const styles = StyleSheet.create({
   detailValue: {
     fontSize: 14,
     color: '#212121',
+  },
+  severityText: {
+    fontWeight: '600',
   },
   descriptionSection: {
     marginBottom: 20,
@@ -311,23 +457,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#424242',
     fontWeight: '500',
-  },
-  saveButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#2196F3',
-    paddingVertical: 14,
-    borderRadius: 8,
-  },
-  saveIcon: {
-    fontSize: 18,
-    marginRight: 8,
-  },
-  saveText: {
-    fontSize: 16,
-    color: '#FFF',
-    fontWeight: '600',
   },
 });

@@ -1,37 +1,104 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  ScrollView,
-  ActivityIndicator,
-  Alert 
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import { ReportService } from '@/services/reportServices';
-import { Report } from '../../data/mockReports';
-import { ReportCard } from '../../components/ReportCard';
 import { useLocation } from '@/hooks/useLocation';
+import { ReportService, CategoryData } from '@/services/reportServices';
 import { calculateGeographicBounds } from '@/utils/locationUtils';
+import { useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+    ActivityIndicator,
+    Alert,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View
+} from 'react-native';
+import { ReportCard } from '../../components/ReportCard';
+import { Report, getMappedCategory } from '../../config/config_types';
 
-type FilterTab = 'Todos' | 'Recientes' | 'Cerca de ti' | 'En proceso';
+type FilterType = 'special' | 'category' | 'status';
 
-// TODO: Realizar notificaciones
+interface Filter {
+  type: FilterType;
+  value: string;
+  label: string;
+}
 
 export default function FeedScreen() {
   const router = useRouter();
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeFilter, setActiveFilter] = useState<FilterTab>('Todos');
+  const [filtersLoading, setFiltersLoading] = useState(true);
+  
+  // Filtros dinámicos
+  const [categories, setCategories] = useState<CategoryData[]>([]);
+  const [statuses, setStatuses] = useState<any[]>([]);
+  const [activeFilter, setActiveFilter] = useState<Filter>({
+    type: 'special',
+    value: 'Todos',
+    label: 'Todos'
+  });
 
-  // Hook de ubicación
   const { location, hasPermission, loading: locationLoading } = useLocation(true);
 
-  // Paginación (solo para "Todos" y "En proceso")
   const [page, setPage] = useState<number>(1);
   const [hasMore, setHasMore] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Cargar categorías y estados disponibles
+  useEffect(() => {
+    const loadFilters = async () => {
+      setFiltersLoading(true);
+      try {
+        const [categoriesData, statusesData] = await Promise.all([
+          ReportService.getCategories(),
+          ReportService.getStatuses()
+        ]);
+        setCategories(categoriesData);
+        setStatuses(statusesData);
+      } catch (error) {
+        console.error('Error loading filters:', error);
+      } finally {
+        setFiltersLoading(false);
+      }
+    };
+
+    loadFilters();
+  }, []);
+
+  // Construir lista de filtros
+// Construir lista de filtros
+const getAllFilters = (): Filter[] => {
+  const filters: Filter[] = [
+    { type: 'special', value: 'Todos', label: 'Todos' },
+    { type: 'special', value: 'Recientes', label: 'Recientes' },
+    { type: 'special', value: 'Cerca de ti', label: 'Cerca de ti' },
+  ];
+
+  // Agregar categorías
+  categories.forEach(cat => {
+    const categoryName = typeof cat === 'string' ? cat : cat.name;
+    const mapped = getMappedCategory(categoryName); // ✅ Esto devuelve un string como "Limpieza"
+    filters.push({
+      type: 'category',
+      value: categoryName,
+      label: mapped // ✅ Ahora mapped es un string
+    });
+  });
+
+  // Agregar estados
+  statuses.forEach(status => {
+    const statusName = typeof status === 'string' ? status : status.name;
+    filters.push({
+      type: 'status',
+      value: statusName,
+      label: statusName // ✅ statusName es un string
+    });
+  });
+
+  return filters;
+};
+
+  const allFilters = getAllFilters();
 
   // Cargar reportes según el filtro activo
   const loadReports = useCallback(async () => {
@@ -40,7 +107,7 @@ export default function FeedScreen() {
 
     try {
       // Filtro "Cerca de Ti"
-      if (activeFilter === 'Cerca de ti') {
+      if (activeFilter.value === 'Cerca de ti') {
         if (!location) {
           setErrorMessage('No se pudo obtener tu ubicación.');
           setReports([]);
@@ -48,14 +115,8 @@ export default function FeedScreen() {
           return;
         }
 
-        // Calcular límites geográficos (5km de radio)
         const bounds = calculateGeographicBounds(location, 5);
-
-        // Obtener reportes del área
-        const nearbyReports = await ReportService.getReportsByArea({
-          bounds,
-          // Puedes agregar más filtros aquí si lo deseas
-        });
+        const nearbyReports = await ReportService.getReportsByArea({ bounds });
 
         setReports(nearbyReports);
 
@@ -63,13 +124,13 @@ export default function FeedScreen() {
           setErrorMessage('No hay reportes cerca de ti (radio de 5 km).');
         }
 
-        setHasMore(false); // No hay paginación en "Cerca de ti"
+        setHasMore(false);
         setLoading(false);
         return;
       }
 
-      // Filtro "Recientes" (últimas 24 horas)
-      if (activeFilter === 'Recientes') {
+      // Filtro "Recientes"
+      if (activeFilter.value === 'Recientes') {
         if (!location) {
           setErrorMessage('No se pudo obtener tu ubicación para calcular distancia.');
           setReports([]);
@@ -77,9 +138,7 @@ export default function FeedScreen() {
           return;
         }
 
-        // Obtener área amplia
-        const bounds = calculateGeographicBounds(location, 50); // 50km de radio
-
+        const bounds = calculateGeographicBounds(location, 50);
         const recentReports = await ReportService.getReportsByArea({
           bounds,
           timeRange: '24h',
@@ -91,23 +150,29 @@ export default function FeedScreen() {
           setErrorMessage('No hay reportes recientes.');
         }
 
-        setHasMore(false); // No hay paginación en "Recientes"
+        setHasMore(false);
         setLoading(false);
         return;
       }
 
-      // Filtros "Todos" y "En proceso" - con paginación
+      // Filtros con paginación (Todos, Categorías, Estados)
+      const filters: any = {};
+      
+      if (activeFilter.type === 'category') {
+        filters.category = activeFilter.value;
+      } else if (activeFilter.type === 'status') {
+        filters.status = activeFilter.value;
+      }
+
       const response = await ReportService.getPaginatedReports({
         page,
         limit: 10,
-        status: activeFilter === 'En proceso' ? 'En proceso' : undefined,
+        ...filters
       });
 
-      // Si page === 1 reemplazamos; si no, acumulamos
       if (page === 1) {
         setReports(response.data);
       } else {
-        // Evitamos duplicados
         setReports(prev => {
           const ids = new Set(prev.map(r => r.id));
           const newItems = response.data.filter(r => !ids.has(r.id));
@@ -131,10 +196,8 @@ export default function FeedScreen() {
     }
   }, [page, activeFilter, location]);
 
-  // Ejecutar carga cuando cambia page, activeFilter o location
   useEffect(() => {
-    // Si el filtro es "Cerca de ti" y la ubicación está cargando, esperar
-    if (activeFilter === 'Cerca de ti' && locationLoading) {
+    if (activeFilter.value === 'Cerca de ti' && locationLoading) {
       setLoading(true);
       return;
     }
@@ -142,16 +205,12 @@ export default function FeedScreen() {
     loadReports();
   }, [page, activeFilter, location, locationLoading]);
 
-  // Cuando el usuario cambia filtro, reiniciamos la paginación
-  const onChangeFilter = (filter: FilterTab) => {
-    // Si selecciona "Cerca de ti" sin permisos de ubicación
-    if (filter === 'Cerca de ti' && !hasPermission) {
+  const onChangeFilter = (filter: Filter) => {
+    if (filter.value === 'Cerca de ti' && !hasPermission) {
       Alert.alert(
         'Ubicación requerida',
         'Para ver reportes cercanos, necesitamos acceso a tu ubicación. Por favor, activa los permisos en la configuración.',
-        [
-          { text: 'Cancelar', style: 'cancel' }
-        ]
+        [{ text: 'Cancelar', style: 'cancel' }]
       );
       return;
     }
@@ -163,13 +222,12 @@ export default function FeedScreen() {
   };
 
   const onLoadMore = () => {
-    // Solo para filtros con paginación
-    if ((activeFilter === 'Todos' || activeFilter === 'En proceso') && hasMore && !loading) {
+    if (activeFilter.value !== 'Recientes' && 
+        activeFilter.value !== 'Cerca de ti' && 
+        hasMore && !loading) {
       setPage(prev => prev + 1);
     }
   };
-
-  const filters: FilterTab[] = ['Todos', 'Recientes', 'Cerca de ti', 'En proceso'];
 
   return (
     <View style={styles.container}>
@@ -188,23 +246,27 @@ export default function FeedScreen() {
         style={styles.filterContainer}
         contentContainerStyle={styles.filterContent}
       >
-        {filters.map((filter) => (
-          <TouchableOpacity
-            key={filter}
-            style={[
-              styles.filterButton,
-              activeFilter === filter && styles.filterButtonActive
-            ]}
-            onPress={() => onChangeFilter(filter)}
-          >
-            <Text style={[
-              styles.filterText,
-              activeFilter === filter && styles.filterTextActive
-            ]}>
-              {filter}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        {filtersLoading ? (
+          <ActivityIndicator size="small" color="#2196F3" style={{ marginLeft: 16 }} />
+        ) : (
+          allFilters.map((filter) => (
+            <TouchableOpacity
+              key={`${filter.type}-${filter.value}`}
+              style={[
+                styles.filterButton,
+                activeFilter.value === filter.value && styles.filterButtonActive
+              ]}
+              onPress={() => onChangeFilter(filter)}
+            >
+              <Text style={[
+                styles.filterText,
+                activeFilter.value === filter.value && styles.filterTextActive
+              ]}>
+                {filter.label}
+              </Text>
+            </TouchableOpacity>
+          ))
+        )}
       </ScrollView>
 
       {/* Mensaje de error / sin datos */}
@@ -221,7 +283,9 @@ export default function FeedScreen() {
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#2196F3" />
           <Text style={styles.loadingText}>
-            {activeFilter === 'Cerca de ti' ? 'Buscando reportes cercanos...' : 'Cargando reportes...'}
+            {activeFilter.value === 'Cerca de ti' 
+              ? 'Buscando reportes cercanos...' 
+              : 'Cargando reportes...'}
           </Text>
         </View>
       ) : (
@@ -235,15 +299,15 @@ export default function FeedScreen() {
             />
           ))}
 
-          {/* Loader para "cargando siguiente página" */}
           {loading && page > 1 && (
             <View style={{ padding: 12, alignItems: 'center' }}>
               <ActivityIndicator size="small" color="#2196F3" />
             </View>
           )}
 
-          {/* Botón Cargar más (solo para Todos y En proceso) */}
-          {hasMore && !loading && (activeFilter === 'Todos' || activeFilter === 'En proceso') && (
+          {hasMore && !loading && 
+           activeFilter.value !== 'Recientes' && 
+           activeFilter.value !== 'Cerca de ti' && (
             <TouchableOpacity
               style={{ padding: 16, alignItems: 'center' }}
               onPress={onLoadMore}
@@ -252,7 +316,6 @@ export default function FeedScreen() {
             </TouchableOpacity>
           )}
 
-          {/* Mensaje cuando no hay más reportes */}
           {!hasMore && reports.length > 0 && (
             <View style={{ padding: 16, alignItems: 'center' }}>
               <Text style={{ color: '#757575', fontSize: 14 }}>

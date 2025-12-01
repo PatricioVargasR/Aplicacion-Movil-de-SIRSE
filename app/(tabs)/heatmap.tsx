@@ -2,23 +2,22 @@
 // app/heatmap.tsx - PANTALLA DE MAPA DE CALOR
 // ==========================================
 
-import React, { useState, useEffect } from 'react';
-import { 
-  View, 
-  Text, 
-  StyleSheet, 
-  TouchableOpacity, 
-  ScrollView,
-  Dimensions,
-  ActivityIndicator
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import MapView, { Marker, Circle, PROVIDER_GOOGLE, Region } from 'react-native-maps';
-import { Report, CATEGORIES } from '@/data/mockReports';
-import { ReportService } from '@/services/reportServices';
+import { Report, CATEGORIES, getMappedCategory } from '@/config/config_types';
 import { useLocation } from '@/hooks/useLocation';
+import { ReportService } from '@/services/reportServices';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import {
+    ActivityIndicator,
+    Dimensions,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View
+} from 'react-native';
+import MapView, { Circle, Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 
-// TODO: Obtener solo los reportes de esa zona, más no filtrarlos
 const { width, height } = Dimensions.get('window');
 
 interface LocationCoords {
@@ -37,10 +36,8 @@ export default function HeatmapScreen() {
   const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('7d');
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
 
-  // 🔥 Usar el hook de ubicación
   const { location, hasPermission, loading: locationLoading } = useLocation(true);
 
-  // Convertir location del hook a LocationCoords con deltas
   const userLocation: LocationCoords | null = location ? {
     latitude: location.latitude,
     longitude: location.longitude,
@@ -48,9 +45,10 @@ export default function HeatmapScreen() {
     longitudeDelta: location.longitudeDelta || 0.05,
   } : null;
 
+  // Solo recargar cuando cambie el rango de tiempo
   useEffect(() => {
     loadReports();
-  }, [selectedCategory, timeRange]);
+  }, [timeRange]);
 
   // Filtrar reportes cuando cambia la región visible
   useEffect(() => {
@@ -58,6 +56,13 @@ export default function HeatmapScreen() {
       filterVisibleReports(currentRegion);
     }
   }, [currentRegion, allReports]);
+
+  // Re-filtrar cuando cambie la categoría seleccionada
+  useEffect(() => {
+    if (currentRegion) {
+      filterVisibleReports(currentRegion, allReports);
+    }
+  }, [selectedCategory]);
 
   // Establecer región inicial cuando la ubicación esté lista
   useEffect(() => {
@@ -69,10 +74,10 @@ export default function HeatmapScreen() {
   const loadReports = async () => {
     setLoading(true);
     try {
-      const filters = selectedCategory ? { category: selectedCategory } : {};
-      const data = await ReportService.getAllReports(filters);
+      // Cargar todos los reportes sin filtro de categoría
+      const data = await ReportService.getAllReports({});
       
-      // ✅ Filtrar por rango de tiempo
+      // Filtrar por rango de tiempo
       const filteredByTime = filterByTimeRange(data, timeRange);
       
       setAllReports(filteredByTime);
@@ -95,13 +100,13 @@ export default function HeatmapScreen() {
 
     switch (range) {
       case '24h':
-        maxAge = 24 * 60 * 60 * 1000; // 24 horas en milisegundos
+        maxAge = 24 * 60 * 60 * 1000;
         break;
       case '7d':
-        maxAge = 7 * 24 * 60 * 60 * 1000; // 7 días
+        maxAge = 7 * 24 * 60 * 60 * 1000;
         break;
       case '30d':
-        maxAge = 30 * 24 * 60 * 60 * 1000; // 30 días
+        maxAge = 30 * 24 * 60 * 60 * 1000;
         break;
     }
 
@@ -111,32 +116,36 @@ export default function HeatmapScreen() {
     });
   };
 
-  // Filtrar reportes que están dentro de la región visible
+  // Filtrar reportes que están dentro de la región visible Y por categoría
   const filterVisibleReports = (region: Region, reports: Report[] = allReports) => {
     const minLat = region.latitude - region.latitudeDelta / 2;
     const maxLat = region.latitude + region.latitudeDelta / 2;
     const minLng = region.longitude - region.longitudeDelta / 2;
     const maxLng = region.longitude + region.longitudeDelta / 2;
 
-    const filtered = reports.filter(report => {
+    let filtered = reports.filter(report => {
       const lat = report.coordinates.latitude;
       const lng = report.coordinates.longitude;
       return lat >= minLat && lat <= maxLat && lng >= minLng && lng <= maxLng;
     });
 
+    // Filtrar por categoría seleccionada (si existe)
+    if (selectedCategory) {
+      filtered = filtered.filter(report => 
+        getMappedCategory(report.category) === selectedCategory
+      );
+    }
+
     setVisibleReports(filtered);
   };
 
-  // Manejar cambio de región del mapa
   const handleRegionChange = (region: Region) => {
     setCurrentRegion(region);
   };
 
-  // Calcular densidad de reportes por zona basado en coordenadas reales
   const calculateHeatZones = () => {
     if (visibleReports.length === 0) return [];
 
-    // Radio de agrupación (aproximadamente 500 metros)
     const clusterRadius = 0.005;
     const clusters: Array<{
       lat: number;
@@ -145,7 +154,6 @@ export default function HeatmapScreen() {
       reports: Report[];
     }> = [];
 
-    // Agrupar reportes cercanos
     visibleReports.forEach(report => {
       let addedToCluster = false;
 
@@ -158,7 +166,6 @@ export default function HeatmapScreen() {
         if (distance < clusterRadius) {
           cluster.count++;
           cluster.reports.push(report);
-          // Actualizar centro del cluster
           cluster.lat = cluster.reports.reduce((sum, r) => sum + r.coordinates.latitude, 0) / cluster.reports.length;
           cluster.lng = cluster.reports.reduce((sum, r) => sum + r.coordinates.longitude, 0) / cluster.reports.length;
           addedToCluster = true;
@@ -176,7 +183,6 @@ export default function HeatmapScreen() {
       }
     });
 
-    // Calcular intensidad basada en la cantidad de reportes
     const maxCount = Math.max(...clusters.map(c => c.count), 1);
     
     return clusters.map(cluster => {
@@ -192,27 +198,25 @@ export default function HeatmapScreen() {
 
   const heatZones = calculateHeatZones();
 
-  // Obtener color según intensidad
   const getHeatColor = (intensity: number) => {
-    if (intensity >= 0.8) return 'rgba(255, 0, 0, 0.5)';      // Rojo intenso
-    if (intensity >= 0.6) return 'rgba(255, 87, 34, 0.4)';    // Naranja
-    if (intensity >= 0.4) return 'rgba(255, 152, 0, 0.35)';   // Amarillo-naranja
-    if (intensity >= 0.2) return 'rgba(255, 235, 59, 0.3)';   // Amarillo
-    return 'rgba(76, 175, 80, 0.25)';                         // Verde (bajo)
+    if (intensity >= 0.8) return 'rgba(255, 0, 0, 0.5)';
+    if (intensity >= 0.6) return 'rgba(255, 87, 34, 0.4)';
+    if (intensity >= 0.4) return 'rgba(255, 152, 0, 0.35)';
+    if (intensity >= 0.2) return 'rgba(255, 235, 59, 0.3)';
+    return 'rgba(76, 175, 80, 0.25)';
   };
 
-  // Obtener radio según intensidad
   const getHeatRadius = (intensity: number, count: number) => {
-    const baseRadius = 200; // metros
-    const maxRadius = 800;  // metros
+    const baseRadius = 200;
+    const maxRadius = 800;
     return Math.min(baseRadius + (intensity * count * 100), maxRadius);
   };
 
-  // Estadísticas por categoría (basadas en reportes visibles)
   const getCategoryStats = () => {
     const stats: Record<string, number> = {};
     visibleReports.forEach(report => {
-      stats[report.category] = (stats[report.category] || 0) + 1;
+      const mappedCategory = getMappedCategory(report.category);
+      stats[mappedCategory] = (stats[mappedCategory] || 0) + 1;
     });
     return stats;
   };
@@ -299,58 +303,61 @@ export default function HeatmapScreen() {
               <Text style={styles.loadingText}>Cargando mapa...</Text>
             </View>
           ) : (
-            <View style={styles.heatmapContainer}>
-              <MapView
-                style={styles.map}
-                provider={PROVIDER_GOOGLE}
-                initialRegion={userLocation}
-                showsUserLocation={hasPermission}
-                showsMyLocationButton={false}
-                scrollEnabled={true}
-                zoomEnabled={true}
-                pitchEnabled={false}
-                rotateEnabled={false}
-                onRegionChangeComplete={handleRegionChange}
-              >
-                {/* Círculos de calor */}
-                {heatZones.map((zone, index) => (
-                  <Circle
-                    key={`circle-${index}`}
-                    center={{
-                      latitude: zone.latitude,
-                      longitude: zone.longitude,
-                    }}
-                    radius={getHeatRadius(zone.intensity, zone.count)}
-                    fillColor={getHeatColor(zone.intensity)}
-                    strokeColor="transparent"
-                  />
-                ))}
+            <>
+              <View style={styles.heatmapContainer}>
+                <MapView
+                  style={styles.map}
+                  provider={PROVIDER_GOOGLE}
+                  initialRegion={userLocation}
+                  showsUserLocation={hasPermission}
+                  showsMyLocationButton={false}
+                  scrollEnabled={true}
+                  zoomEnabled={true}
+                  pitchEnabled={false}
+                  rotateEnabled={false}
+                  onRegionChangeComplete={handleRegionChange}
+                >
+                  {/* Círculos de calor */}
+                  {heatZones.map((zone, index) => (
+                    <Circle
+                      key={`circle-${index}`}
+                      center={{
+                        latitude: zone.latitude,
+                        longitude: zone.longitude,
+                      }}
+                      radius={getHeatRadius(zone.intensity, zone.count)}
+                      fillColor={getHeatColor(zone.intensity)}
+                      strokeColor="transparent"
+                    />
+                  ))}
 
-                {/* Marcadores con conteo */}
-                {heatZones.map((zone, index) => (
-                  <Marker
-                    key={`marker-${index}`}
-                    coordinate={{
-                      latitude: zone.latitude,
-                      longitude: zone.longitude,
-                    }}
-                  >
-                    <View style={styles.heatMarker}>
-                      <View style={[
-                        styles.heatMarkerBadge,
-                        { 
-                          backgroundColor: getHeatColor(zone.intensity).replace('0.5', '0.9').replace('0.4', '0.9').replace('0.35', '0.9').replace('0.3', '0.9').replace('0.25', '0.9')
-                        }
-                      ]}>
-                        <Text style={styles.heatMarkerText}>{zone.count}</Text>
+                  {/* Marcadores con conteo */}
+                  {heatZones.map((zone, index) => (
+                    <Marker
+                      key={`marker-${index}`}
+                      coordinate={{
+                        latitude: zone.latitude,
+                        longitude: zone.longitude,
+                      }}
+                    >
+                      <View style={styles.heatMarker}>
+                        <View style={[
+                          styles.heatMarkerBadge,
+                          { 
+                            backgroundColor: getHeatColor(zone.intensity).replace(/0\.\d+/, '0.9')
+                          }
+                        ]}>
+                          <Text style={styles.heatMarkerText}>{zone.count}</Text>
+                        </View>
                       </View>
-                    </View>
-                  </Marker>
-                ))}
-              </MapView>
+                    </Marker>
+                  ))}
+                </MapView>
+              </View>
 
+              {/* Mensaje cuando no hay reportes - FUERA del mapa */}
               {heatZones.length === 0 && !loading && (
-                <View style={styles.emptyStateOverlay} pointerEvents="none">
+                <View style={styles.emptyStateMessage}>
                   <Text style={styles.emptyStateText}>
                     📍 No hay reportes en esta área
                   </Text>
@@ -359,8 +366,7 @@ export default function HeatmapScreen() {
                   </Text>
                 </View>
               )}
-
-            </View>
+            </>
           )}
 
           {/* Leyenda de intensidad */}
@@ -398,10 +404,10 @@ export default function HeatmapScreen() {
             {Object.entries(CATEGORIES).map(([category, config]) => {
               const count = categoryStats[category] || 0;
               const percentage = visibleReports.length > 0 
-                ? ((count / visibleReports.length) * 100).toFixed(0) 
+                ? ((count / visibleReports.length) * 100).toFixed(0)
                 : 0;
 
-              if (count === 0) return null; // No mostrar categorías sin reportes
+              if (count === 0) return null;
 
               return (
                 <TouchableOpacity
@@ -437,7 +443,7 @@ export default function HeatmapScreen() {
                             width: `${percentage}%` as any,
                             backgroundColor: config.color
                           }
-                        ]} 
+                        ]}
                       />
                     </View>
                   </View>
@@ -601,7 +607,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#E8F5E9',
     borderRadius: 8,
     overflow: 'hidden',
-    position: 'relative',
   },
   map: {
     width: '100%',
@@ -632,26 +637,22 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFF',
   },
-  emptyStateOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
+  emptyStateMessage: {
+    marginTop: 12,
+    padding: 16,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.85)',
-    padding: 20,
   },
   emptyStateText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: '600',
     color: '#757575',
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   emptyStateSubtext: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#9E9E9E',
     textAlign: 'center',
   },

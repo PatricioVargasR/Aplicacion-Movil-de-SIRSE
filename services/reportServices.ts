@@ -1,13 +1,7 @@
-import { MOCK_REPORTS, Report } from '../data/mockReports';
+import { Report } from '../config/config_types';
 
 /**
- * ReportService - Simulates API calls with static data
- * 
- * TODO: Replace with real API integration
- * - Change Promise.resolve() to actual fetch/axios calls
- * - Add error handling for network failures
- * - Implement authentication tokens if needed
- * - Add retry logic for failed requests
+ * ReportService - Integración con API real usando XMLHttpRequest
  */
 
 export interface PaginationResult<T> {
@@ -24,11 +18,8 @@ export interface ReportFilters {
   status?: string;
   page?: number;
   limit?: number;
-  simulateOffline?: boolean;
-  simulateEmpty?: boolean;
 }
 
-// Interface para filtros geográficos
 export interface GeographicBounds {
   northEast: {
     latitude: number;
@@ -40,205 +31,164 @@ export interface GeographicBounds {
   };
 }
 
-// ✅ ACTUALIZADA: Ahora con paginación
 export interface AreaReportFilters {
   bounds: GeographicBounds;
   category?: string;
   status?: string;
   timeRange?: '24h' | '7d' | '30d';
-  page?: number;           // ✅ NUEVO
-  limit?: number;          // ✅ NUEVO
-  simulateOffline?: boolean;
-  simulateEmpty?: boolean;
+  page?: number;
+  limit?: number;
 }
+
+export interface CategoryData {
+  id: string;
+  name: string;
+  description?: string;
+  active?: boolean;
+  createdAt?: string;
+}
+
+
+const BASE_URL = "https://cerberusteck.com.mx/sirse/api";
+
+/**
+ * Helper para hacer peticiones XMLHttpRequest
+ */
+const xhrRequest = <T>(url: string, method: 'GET' | 'POST' = 'GET'): Promise<T> => {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          resolve(data);
+        } catch (error) {
+          reject(new Error('Error al parsear la respuesta JSON'));
+        }
+      } else {
+        reject(new Error(`Error HTTP: ${xhr.status}`));
+      }
+    };
+    
+    xhr.onerror = () => reject(new Error('Error de red'));
+    xhr.ontimeout = () => reject(new Error('Timeout'));
+    
+    xhr.open(method, url);
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.timeout = 10000;
+    xhr.send();
+  });
+};
 
 export const ReportService = {
   /**
-   * Fetch all reports with optional filters
-   * 
-   * @future API endpoint: GET /api/reports?category={category}&status={status}
+   * Obtener todos los reportes con filtros opcionales
+   * GET /get_all_reports.php?category={category}&status={status}
    */
   getAllReports: async (filters?: { 
-    category?: string; 
+    category?: string;
     status?: string;
   }): Promise<Report[]> => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        let reports = [...MOCK_REPORTS];
-        
-        if (filters?.category) {
-          reports = reports.filter(r => r.category === filters.category);
-        }
-        if (filters?.status) {
-          reports = reports.filter(r => r.status === filters.status);
-        }
-        
-        resolve(reports);
-      }, 500);
-    });
+    const params = new URLSearchParams();
+    if (filters?.category) params.append('category', filters.category);
+    if (filters?.status) params.append('status', filters.status);
+
+    const queryString = params.toString();
+    const url = `${BASE_URL}/get_all_reports.php${queryString ? `?${queryString}` : ''}`;
+
+    return xhrRequest<Report[]>(url);
   },
 
   /**
-   * Fetch single report by ID
-   * 
-   * @future API endpoint: GET /api/reports/:id
+   * Obtener un reporte por ID (folio)
+   * GET /get_report_by_id.php?id={id}
    */
-  getReportById: async (id: string): Promise<Report | undefined> => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const report = MOCK_REPORTS.find(r => r.id === id);
-        resolve(report);
-      }, 300);
-    });
+  getReportById: async (id: string): Promise<Report | null> => {
+
+    const url = `${BASE_URL}/get_report_by_id.php?id=${id}`;
+    
+    try {
+      const report = await xhrRequest<Report[]>(url);
+      console.log(report)
+      return report[0] ?? null;
+    } catch (error) {
+      console.error('Error obteniendo reporte por ID:', error);
+      return null;
+    }
   },
 
   /**
-   * Fetch paginated reports with optional filters
-   *
-   * @future: /api/reports?page={page}&limit={limit}&category={category}&status={status}
+   * Obtener reportes paginados con filtros opcionales
+   * GET /get_paginated_reports.php?page={page}&limit={limit}&category={category}&status={status}
    */
   getPaginatedReports: async (
     filters?: ReportFilters
   ): Promise<PaginationResult<Report>> => {
+    const params = new URLSearchParams();
     
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
+    if (filters?.page) params.append('page', filters.page.toString());
+    if (filters?.limit) params.append('limit', filters.limit.toString());
+    if (filters?.category) params.append('category', filters.category);
+    if (filters?.status) params.append('status', filters.status);
 
-        if (filters?.simulateOffline) {
-          return reject({
-            message: "No hay conexión a internet.",
-            code: "OFFLINE"
-          });
-        }
+    const queryString = params.toString();
+    const url = `${BASE_URL}/get_paginated_reports.php${queryString ? `?${queryString}` : ''}`;
 
-        const page = filters?.page ?? 1;
-        const limit = filters?.limit ?? 1;
-        let reports = [...MOCK_REPORTS];
-
-        if (filters?.simulateEmpty) {
-          reports = [];
-        }
-
-        if (filters?.category) {
-          reports = reports.filter(r => r.category === filters.category);
-        }
-        if (filters?.status) {
-          reports = reports.filter(r => r.status === filters.status);
-        }
-
-        if (reports.length === 0) {
-          return resolve({
-            data: [],
-            page,
-            limit,
-            total: 0,
-            totalPages: 0,
-            hasMore: false
-          });
-        }
-
-        const startIndex = (page - 1) * limit;
-        const endIndex = startIndex + limit;
-        const paginatedData = reports.slice(startIndex, endIndex);
-
-        const total = reports.length;
-        const totalPages = Math.ceil(total / limit);
-        const hasMore = page < totalPages;
-
-        resolve({
-          data: paginatedData,
-          page,
-          limit,
-          total,
-          totalPages,
-          hasMore
-        });
-
-      }, 800);
-    });
+    return xhrRequest<PaginationResult<Report>>(url);
   },
 
   /**
-   * ✅ ACTUALIZADO: Fetch reports within a geographic area (SIN paginación)
-   * 
-   * Usa este método cuando necesites TODOS los reportes del área
-   * (por ejemplo, para generar mapas de calor o estadísticas completas)
-   * 
-   * @future API endpoint: POST /api/reports/by-area
+   * Obtener reportes dentro de un área geográfica
+   * GET /get_reports_by_area.php?ne_lat={lat}&ne_lng={lng}&sw_lat={lat}&sw_lng={lng}&category={category}&status={status}&timeRange={range}&page={page}&limit={limit}
    */
   getReportsByArea: async (
     filters: AreaReportFilters
   ): Promise<Report[]> => {
-    return new Promise((resolve, reject) => {
-      setTimeout(() => {
-        
-        if (filters.simulateOffline) {
-          return reject({
-            message: "No hay conexión a internet.",
-            code: "OFFLINE"
-          });
-        }
+    const params = new URLSearchParams();
+    
+    // Coordenadas del área
+    params.append('ne_lat', filters.bounds.northEast.latitude.toString());
+    params.append('ne_lng', filters.bounds.northEast.longitude.toString());
+    params.append('sw_lat', filters.bounds.southWest.latitude.toString());
+    params.append('sw_lng', filters.bounds.southWest.longitude.toString());
+    
+    // Filtros opcionales
+    if (filters.category) params.append('category', filters.category);
+    if (filters.status) params.append('status', filters.status);
+    if (filters.timeRange) params.append('timeRange', filters.timeRange);
+    if (filters.page) params.append('page', filters.page.toString());
+    if (filters.limit) params.append('limit', filters.limit.toString());
 
-        let reports = [...MOCK_REPORTS];
-
-        if (filters.simulateEmpty) {
-          return resolve([]);
-        }
-
-        // 1️⃣ Filtrar por área geográfica
-        const { northEast, southWest } = filters.bounds;
-        
-        reports = reports.filter(report => {
-          const lat = report.coordinates.latitude;
-          const lng = report.coordinates.longitude;
-          
-          return (
-            lat <= northEast.latitude &&
-            lat >= southWest.latitude &&
-            lng <= northEast.longitude &&
-            lng >= southWest.longitude
-          );
-        });
-
-        // 2️⃣ Filtrar por categoría
-        if (filters.category) {
-          reports = reports.filter(r => r.category === filters.category);
-        }
-
-        // 3️⃣ Filtrar por estado
-        if (filters.status) {
-          reports = reports.filter(r => r.status === filters.status);
-        }
-
-        // 4️⃣ Filtrar por rango de tiempo
-        if (filters.timeRange) {
-          const now = Date.now();
-          let maxAge = 0;
-
-          switch (filters.timeRange) {
-            case '24h':
-              maxAge = 24 * 60 * 60 * 1000;
-              break;
-            case '7d':
-              maxAge = 7 * 24 * 60 * 60 * 1000;
-              break;
-            case '30d':
-              maxAge = 30 * 24 * 60 * 60 * 1000;
-              break;
-          }
-
-          reports = reports.filter(report => {
-            const reportAge = now - report.reportedAtTimestamp;
-            return reportAge <= maxAge;
-          });
-        }
-
-        resolve(reports);
-
-        console.log("Hola")
-
-      }, 600);
-    });
+    const url = `${BASE_URL}/get_reports_by_area.php?${params.toString()}`;
+    
+    return xhrRequest<Report[]>(url);
   },
 
+  /**
+   * Obtener categorías disponibles
+   * GET /get_categories.php
+   */
+  getCategories: async (): Promise<CategoryData[]> => {
+    const url = `${BASE_URL}/get_categories.php`;
+    return xhrRequest<CategoryData[]>(url);
+  },
+
+  /**
+   * Obtener estados disponibles
+   * GET /get_statuses.php
+   */
+  getStatuses: async (): Promise<string[]> => {
+    const url = `${BASE_URL}/get_statuses.php`;
+    return xhrRequest<string[]>(url);
+  },
+
+  /**
+   * Health check del API
+   * GET /
+   */
+  healthCheck: async (): Promise<{ status: string; message: string }> => {
+    const url = BASE_URL;
+    return xhrRequest<{ status: string; message: string }>(url);
+  }
 };

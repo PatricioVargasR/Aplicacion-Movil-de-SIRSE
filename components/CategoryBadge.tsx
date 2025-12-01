@@ -1,9 +1,10 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { CATEGORIES } from '../data/mockReports';
+import { CATEGORIES, getCategoryConfig } from '@/config/config_types';
 
 interface CategoryBadgeProps {
-  category: keyof typeof CATEGORIES;
+  // Puede recibir tanto categorías de la app como de la API
+  category: string;
   size?: 'small' | 'medium' | 'large';
 }
 
@@ -11,7 +12,9 @@ export const CategoryBadge: React.FC<CategoryBadgeProps> = ({
   category, 
   size = 'medium' 
 }) => {
-  const config = CATEGORIES[category];
+  // Mapea automáticamente si es una categoría de la API
+  const config = getCategoryConfig(category);
+  
   const sizeStyles = {
     small: { width: 32, height: 32, fontSize: 16 },
     medium: { width: 40, height: 40, fontSize: 20 },
@@ -39,6 +42,13 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 4,
   },
   icon: {
     textAlign: 'center',

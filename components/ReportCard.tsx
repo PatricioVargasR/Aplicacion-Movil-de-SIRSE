@@ -1,17 +1,17 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { Report } from '../data/mockReports';
+import { LocationCoords, useLocation } from '@/hooks/useLocation';
+import { calculateDistance, formatDistance } from '@/utils/locationUtils';
+import { getShortAddress } from '@/utils/geoCodingUtils';
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Report } from '../config/config_types';
 import { CategoryBadge } from './CategoryBadge';
 import { StatusBadge } from './StatusBadge';
-import { calculateDistance, formatDistance } from '@/utils/locationUtils'; // ajusta el path si cambia
-import { useLocation } from '@/hooks/useLocation';
 
 interface ReportCardProps {
   report: Report;
   onPress: () => void;
-  userLocation?: { latitude: number; longitude: number } | null;
+  userLocation?: LocationCoords | null;
 }
-
 
 /**
  * Convierte un timestamp en texto legible (minutos, horas o días)
@@ -27,24 +27,68 @@ const getTimeAgo = (timestamp: number): string => {
   return `Hace ${diffDays} ${diffDays === 1 ? 'día' : 'días'}`;
 };
 
+/**
+ * Acorta la dirección para mostrar solo lo esencial
+ */
+const shortenAddress = (address: string): string => {
+  const parts = address.split(',');
+  return parts[0].trim();
+};
+
 export const ReportCard: React.FC<ReportCardProps> = ({ report, onPress }) => {
-  const { location: userLocation } = useLocation(false); // no pide permiso al montar
+  const { location: userLocation } = useLocation(false);
+  
+  // Estado para la ubicación (puede ser del API o geocodificada)
+  const [locationText, setLocationText] = useState<string>(() => {
+    // Si tiene "WhatsApp", empezar con placeholder
+    if (report.address.toLowerCase().includes('whatsapp')) {
+      return 'Obteniendo ubicación...';
+    }
+    // Si no, usar el address directamente
+    return shortenAddress(report.address);
+  });
+
+  // 🌍 Geocodificar SOLO si es "WhatsApp location"
+  useEffect(() => {
+    const loadAddress = async () => {
+      if (report.address.toLowerCase().includes('whatsapp')) {
+        try {
+          const address = await getShortAddress(report.coordinates);
+          setLocationText(address);
+        } catch (error) {
+          console.error('Error geocodificando:', error);
+          // Fallback a coordenadas si falla
+          setLocationText(
+            `${report.coordinates.latitude.toFixed(4)}, ${report.coordinates.longitude.toFixed(4)}`
+          );
+        }
+      }
+    };
+
+    loadAddress();
+  }, [report.address, report.coordinates]);
 
   // ⏱️ Tiempo transcurrido
   const timeAgo = report.reportedAtTimestamp
     ? getTimeAgo(report.reportedAtTimestamp)
-    : report.timestamp ?? '—';
+    : '—';
 
-  // 📍 Distancia dinámica (o fallback)
+  // 📍 Distancia calculada dinámicamente
   const distance =
     userLocation && report.coordinates
       ? formatDistance(
           calculateDistance(
-            { latitude: userLocation.latitude, longitude: userLocation.longitude },
-            { latitude: report.coordinates.latitude, longitude: report.coordinates.longitude }
+            { 
+              latitude: userLocation.latitude, 
+              longitude: userLocation.longitude 
+            },
+            { 
+              latitude: report.coordinates.latitude, 
+              longitude: report.coordinates.longitude 
+            }
           )
         )
-      : report.distance ?? '—';
+      : '—';
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress}>
@@ -64,19 +108,22 @@ export const ReportCard: React.FC<ReportCardProps> = ({ report, onPress }) => {
       <View style={styles.details}>
         <View style={styles.detailRow}>
           <Text style={styles.detailIcon}>📍</Text>
-          <Text style={styles.detailText}>{report.location}</Text>
+          <Text style={styles.detailText} numberOfLines={1}>
+            {locationText}
+          </Text>
         </View>
         <View style={styles.detailRow}>
           <Text style={styles.detailIcon}>🕐</Text>
           <Text style={styles.detailText}>{timeAgo}</Text>
-          <Text style={styles.distance}>{`${distance}`}</Text>
+          {distance !== '—' && (
+            <Text style={styles.distance}>{distance}</Text>
+          )}
         </View>
       </View>
     </TouchableOpacity>
   );
 };
 
-// 🎨 Estilos
 const styles = StyleSheet.create({
   card: {
     backgroundColor: '#FFF',
@@ -135,5 +182,6 @@ const styles = StyleSheet.create({
   distance: {
     fontSize: 12,
     color: '#2196F3',
+    fontWeight: '600',
   },
 });

@@ -1,22 +1,20 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Alert,
-  ActivityIndicator 
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
-import { ReportService } from '@/services/reportServices';
-import { Report, CATEGORIES } from '../../data/mockReports';
 import { DrawerMenu } from '@/components/DrawnerMenu';
 import { useLocation } from '@/hooks/useLocation';
+import { ReportService } from '@/services/reportServices';
 import * as Linking from 'expo-linking';
-
-// TODO: Obtener solo los reportes de esa zona, más no filtrarlos
+import { useRouter } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
+} from 'react-native';
+import MapView, { Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import { CATEGORIES, Report, CATEGORY_MAPPING } from '@/config/config_types';
 
 interface LocationCoords {
   latitude: number;
@@ -34,10 +32,8 @@ export default function MapScreen() {
   const [currentRegion, setCurrentRegion] = useState<Region | null>(null);
   const mapRef = useRef<MapView>(null);
 
-  // 🔥 Usar el hook de ubicación
   const { location, hasPermission, loading: locationLoading, refreshLocation } = useLocation(true);
 
-  // Convertir location del hook a LocationCoords con deltas
   const userLocation: LocationCoords | null = location ? {
     latitude: location.latitude,
     longitude: location.longitude,
@@ -49,25 +45,21 @@ export default function MapScreen() {
     loadReports();
   }, []);
 
-  // Filtrar reportes cuando cambia la región visible
   useEffect(() => {
     if (currentRegion && allReports.length > 0) {
       filterVisibleReports(currentRegion);
     }
   }, [currentRegion, allReports]);
 
-  // Establecer región inicial cuando la ubicación esté lista
   useEffect(() => {
     if (userLocation && !currentRegion) {
       setCurrentRegion(userLocation);
     }
   }, [userLocation]);
 
-  // Centrar mapa en ubicación del usuario
   const centerOnUser = async () => {
     if (hasPermission) {
       await refreshLocation();
-      // Animar el mapa a la nueva ubicación
       if (mapRef.current && userLocation) {
         mapRef.current.animateToRegion(userLocation, 1000);
       }
@@ -84,7 +76,6 @@ export default function MapScreen() {
     try {
       const data = await ReportService.getAllReports();
       setAllReports(data);
-      // Si ya hay una región, filtrar inmediatamente
       if (currentRegion) {
         filterVisibleReports(currentRegion, data);
       } else {
@@ -97,7 +88,6 @@ export default function MapScreen() {
     }
   };
 
-  // Filtrar reportes que están dentro de la región visible
   const filterVisibleReports = (region: Region, reports: Report[] = allReports) => {
     const minLat = region.latitude - region.latitudeDelta / 2;
     const maxLat = region.latitude + region.latitudeDelta / 2;
@@ -113,15 +103,19 @@ export default function MapScreen() {
     setVisibleReports(filtered);
   };
 
-  // Manejar cambio de región del mapa
   const handleRegionChange = (region: Region) => {
     setCurrentRegion(region);
   };
 
-  // Obtener el icono según la categoría
-  const getCategoryIcon = (category: keyof typeof CATEGORIES) => {
-    const config = CATEGORIES[category];
-    return config.icon;
+  // Mapear categoría de la API a categoría de la app
+  const getMappedCategory = (apiCategory: string): keyof typeof CATEGORIES => {
+    return CATEGORY_MAPPING[apiCategory] || 'Otros';
+  };
+
+  // Obtener configuración de categoría (color e icono)
+  const getCategoryConfig = (apiCategory: string) => {
+    const mappedCategory = getMappedCategory(apiCategory);
+    return CATEGORIES[mappedCategory];
   };
 
   const openWhatsApp = (phoneNumber: string, message: string) => {
@@ -168,30 +162,35 @@ export default function MapScreen() {
             onRegionChangeComplete={handleRegionChange}
           >
             {/* Marcadores de reportes visibles */}
-            {visibleReports.map((report) => (
-              <Marker
-                key={report.id}
-                coordinate={{
-                  latitude: report.coordinates.latitude,
-                  longitude: report.coordinates.longitude,
-                }}
-                onPress={() => router.push(`/report/${report.id}`)}
-              >
-                <View style={styles.customMarker}>
-                  <View style={[
-                    styles.markerBadge,
-                    { backgroundColor: CATEGORIES[report.category].color }
-                  ]}>
-                    <Text style={styles.markerIcon}>
-                      {getCategoryIcon(report.category)}
-                    </Text>
+            {visibleReports.map((report) => {
+              const categoryConfig = getCategoryConfig(report.category);
+              const isUrgent = report.status === 'Urgente';
+              
+              return (
+                <Marker
+                  key={report.id}
+                  coordinate={{
+                    latitude: report.coordinates.latitude,
+                    longitude: report.coordinates.longitude,
+                  }}
+                  onPress={() => router.push(`/report/${report.id}`)}
+                >
+                  <View style={styles.customMarker}>
+                    <View style={[
+                      styles.markerBadge,
+                      { backgroundColor: categoryConfig.color }
+                    ]}>
+                      <Text style={styles.markerIcon}>
+                        {categoryConfig.icon}
+                      </Text>
+                    </View>
+                    {isUrgent && (
+                      <View style={styles.urgentIndicator} />
+                    )}
                   </View>
-                  {report.status === 'Urgente' && (
-                    <View style={styles.urgentIndicator} />
-                  )}
-                </View>
-              </Marker>
-            ))}
+                </Marker>
+              );
+            })}
           </MapView>
         ) : (
           <View style={styles.loadingContainer}>
@@ -200,7 +199,7 @@ export default function MapScreen() {
           </View>
         )}
 
-        {/* Info Badge - Contador de reportes visibles */}
+        {/* Info Badge */}
         <View style={styles.infoBadge}>
           <Text style={styles.infoBadgeText}>
             📍 {visibleReports.length} {visibleReports.length === 1 ? 'reporte' : 'reportes'} en esta área
@@ -228,7 +227,7 @@ export default function MapScreen() {
                 { text: 'Cancelar', style: 'cancel' },
                 {
                   text: 'Abrir WhatsApp',
-                  onPress: () => openWhatsApp('7714393946', 'Hola, deseo reportar un incidente.')
+                  onPress: () => openWhatsApp('5541767620', 'Hola, deseo reportar un incidente.')
                 },
               ]
             );
@@ -246,7 +245,7 @@ export default function MapScreen() {
             {Object.entries(CATEGORIES).map(([name, config]) => (
               <View key={name} style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: config.color }]} />
-                <Text style={styles.legendText}>{name}</Text>
+                <Text style={styles.legendText}>{config.icon} {name}</Text>
               </View>
             ))}
           </View>
@@ -410,29 +409,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   markerBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: '#FFF',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,
-    shadowRadius: 3,
+    shadowRadius: 4,
     elevation: 5,
   },
   markerIcon: {
-    fontSize: 18,
+    fontSize: 20,
   },
   urgentIndicator: {
     position: 'absolute',
-    top: -2,
-    right: -2,
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    top: -4,
+    right: -4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
     backgroundColor: '#FF5252',
     borderWidth: 2,
     borderColor: '#FFF',
