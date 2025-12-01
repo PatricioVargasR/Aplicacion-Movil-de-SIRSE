@@ -1,6 +1,7 @@
 import { ReportService } from '@/services/reportServices';
 import { getShortAddress } from '@/utils/geoCodingUtils';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as Linking from 'expo-linking';
 import React, { useEffect, useState } from 'react';
 import {
     ActivityIndicator,
@@ -11,7 +12,9 @@ import {
     StyleSheet,
     Text,
     TouchableOpacity,
-    View
+    View,
+    Alert,
+    Platform
 } from 'react-native';
 import { CategoryBadge } from '../../components/CategoryBadge';
 import { StatusBadge } from '../../components/StatusBadge';
@@ -31,12 +34,10 @@ export default function ReportDetailScreen() {
     loadReport();
   }, [id]);
 
-  // Cargar dirección si es necesario
   useEffect(() => {
     const loadAddress = async () => {
       if (!report) return;
 
-      // Si tiene "WhatsApp", geocodificar
       if (report.address.toLowerCase().includes('whatsapp')) {
         try {
           const address = await getShortAddress(report.coordinates);
@@ -48,7 +49,6 @@ export default function ReportDetailScreen() {
           );
         }
       } else {
-        // Usar address directamente
         setLocationText(report.address);
       }
     };
@@ -83,6 +83,75 @@ export default function ReportDetailScreen() {
       minute: '2-digit',
       hour12: false,
     });
+  };
+
+  const handleShare = async () => {
+    if (!report) return;
+
+    try {
+      // Crear deep link para la app
+      const deepLink = Linking.createURL(`report/${report.id}`);
+      
+      // En Android, el URL se agrega automáticamente al mensaje
+      // En iOS, necesitamos incluirlo manualmente
+      const messageText = `🚨 Reporte SIRSE: ${report.title}
+
+📋 ${report.description}
+
+📍 ${locationText}
+🕒 ${formatTimestamp(report.reportedAtTimestamp)}
+📊 Estado: ${report.status}`;
+
+      const shareContent = Platform.OS === 'ios' 
+        ? {
+            message: `${messageText}\n\n👉 Ver más: ${deepLink}`,
+            title: `Reporte: ${report.title}`
+          }
+        : {
+            message: messageText,
+            url: deepLink,
+            title: `Reporte: ${report.title}`
+          };
+
+      const result = await Share.share(shareContent);
+
+      if (result.action === Share.sharedAction) {
+        if (result.activityType) {
+          console.log('Compartido vía:', result.activityType);
+        } else {
+          console.log('Compartido exitosamente');
+        }
+      }
+    } catch (error: any) {
+      Alert.alert('Error', 'No se pudo compartir el reporte');
+      console.error('Error al compartir:', error);
+    }
+  };
+
+  const handleCopyLink = async () => {
+    if (!report) return;
+
+    try {
+      const deepLink = Linking.createURL(`report/${report.id}`);
+      
+      // En React Native no hay clipboard nativo, pero podemos mostrar el link
+      Alert.alert(
+        'Link del reporte',
+        deepLink,
+        [
+          {
+            text: 'Compartir',
+            onPress: handleShare
+          },
+          {
+            text: 'Cerrar',
+            style: 'cancel'
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error generando link:', error);
+    }
   };
 
   if (loading) {
@@ -135,7 +204,7 @@ export default function ReportDetailScreen() {
           </View>
         )}
 
-        {/* Galería de fotos (si hay más de una) */}
+        {/* Galería de fotos */}
         {hasPhotos && report.photos.length > 1 && (
           <View style={styles.gallery}>
             <ScrollView 
@@ -238,26 +307,18 @@ export default function ReportDetailScreen() {
         <View style={styles.actions}>
           <TouchableOpacity 
             style={styles.shareButton}
-            onPress={async () => {
-              try {
-                await Share.share({
-                  message: `🚨 Reporte: ${report.title}\n\n${report.description}\n\n📍 ${locationText}\n🕒 ${formatTimestamp(report.reportedAtTimestamp)}\n\nVer más en la app.`,
-                });
-              } catch (error) {
-                console.error('Error al compartir:', error);
-              }
-            }}
+            onPress={handleShare}
           >
             <Text style={styles.shareIcon}>📤</Text>
             <Text style={styles.shareText}>Compartir</Text>
           </TouchableOpacity>
+
         </View>
       </ScrollView>
     </View>
   );
 }
 
-// Helper para color de severidad
 const getSeverityColor = (severity: string): string => {
   switch (severity.toLowerCase()) {
     case 'alta': return '#F44336';
@@ -443,7 +504,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#2196F3',
+    paddingVertical: 14,
+    borderRadius: 8,
+  },
+  linkButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#FFF',
+    paddingHorizontal: 20,
     paddingVertical: 14,
     borderRadius: 8,
     borderWidth: 1,
@@ -455,7 +525,7 @@ const styles = StyleSheet.create({
   },
   shareText: {
     fontSize: 16,
-    color: '#424242',
+    color: '#FFF',
     fontWeight: '500',
   },
 });
