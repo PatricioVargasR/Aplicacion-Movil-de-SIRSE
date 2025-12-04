@@ -253,7 +253,7 @@
     <div class="help-btn">?</div>
 
     <script>
-        const API_URL = 'https://api-sirse.vercel.app';
+        const API_URL = 'https://api-sirse.vercel.app/api';
 
         // Toggle password visibility
         document.getElementById('toggle-password').addEventListener('click', function() {
@@ -277,6 +277,18 @@
             errorMessage.style.display = 'none';
 
             try {
+                // const response = await fetch(`${API_URL}/`, {
+                //     method: 'GET',
+                //     headers: {
+                //         'Content-Type': 'application/json'
+                //     }
+                // });
+
+                // const data = await response.json()
+
+                // if (response.ok) {
+                //     console.log(data)
+                
                 const response = await fetch(`${API_URL}/auth/login`, {
                     method: 'POST',
                     headers: {

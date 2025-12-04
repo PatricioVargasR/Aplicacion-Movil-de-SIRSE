@@ -1,4 +1,4 @@
-const API_URL = 'https://api-sirse.vercel.app';
+const API_URL = 'https://api-sirse.vercel.app/api';
 
 // Check if user is authenticated
 function checkAuth() {
